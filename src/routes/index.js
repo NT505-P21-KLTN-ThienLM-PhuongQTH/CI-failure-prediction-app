@@ -5,8 +5,8 @@ const authenticateToken = require('../middlewares/auth');
 
 router.use('/auth', authRoutes);
 
-router.get('/profile', authenticateToken, (req, res) => {
-    res.status(200).json({ message: 'Protected route accessed', user: req.user });
-});
+// router.get('/profile', authenticateToken, (req, res) => {
+//     res.status(200).json({ message: 'Protected route accessed', user: req.user });
+// });
 
 module.exports = router;

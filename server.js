@@ -1,14 +1,14 @@
 const express = require('express');
 const cors = require('cors');
-const { connectDB } = require('./config');
-const routes = require('./routes');
-const errorHandler = require('./middlewares/error');
 require('dotenv').config();
+const { connectDB } = require('./src/config');
+const routes = require('./src/routes');
+const errorHandler = require('./src/middlewares/error');
 
 const app = express();
 
 // Middleware
-app.use(cors({ origin: process.env.FRONTEND_URL || 'http://localhost:3000' }));
+app.use(cors({ origin: process.env.FRONTEND_URL || 'http://localhost:5173' }));
 app.use(express.json());
 
 // Connect to database

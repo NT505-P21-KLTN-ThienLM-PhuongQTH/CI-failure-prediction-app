@@ -6,6 +6,12 @@ const { jwtConfig } = require("../config");
 const register = async (req, res) => {
     try {
         const { name, email, password } = req.body;
+        // console.log('Register request body:', req.body);
+
+        if (!name || !email || !password) {
+            console.log('Missing fields:', { name, email, password });
+            return res.status(400).json({ message: "All fields are required" });
+        }
 
         const existingUser = await User.findOne({ email });
         if (existingUser) {
