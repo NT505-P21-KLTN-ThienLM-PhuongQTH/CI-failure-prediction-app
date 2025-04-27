@@ -1,12 +1,16 @@
 const express = require('express');
 const router = express.Router();
-const authRoutes = require('./auth');
 const authenticateToken = require('../middlewares/auth');
+const authRoutes = require('./auth');
+const repoRoutes = require('./repo');
+const workflowRoutes = require('./workflow');
+const webhookRoutes = require('./webhook');
+const webhookUserRoutes = require('./webhookUser');
 
 router.use('/auth', authRoutes);
-
-// router.get('/profile', authenticateToken, (req, res) => {
-//     res.status(200).json({ message: 'Protected route accessed', user: req.user });
-// });
+router.use('/repos', repoRoutes);
+router.use('/', workflowRoutes);
+router.use('/webhook-user', webhookUserRoutes);
+router.use('/webhook', webhookRoutes);
 
 module.exports = router;

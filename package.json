@@ -20,13 +20,16 @@
   },
   "homepage": "https://github.com/NT505-P21-KLTN-ThienLM-PhuongQTH/CI-failure-prediction-app#readme",
   "dependencies": {
+    "axios": "^1.9.0",
+    "axios-retry": "^4.5.0",
     "bcrypt": "^5.1.1",
     "bcryptjs": "^3.0.2",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
-    "mongoose": "^8.13.1"
+    "mongoose": "^8.13.1",
+    "node-fetch": "^2.7.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.9"
