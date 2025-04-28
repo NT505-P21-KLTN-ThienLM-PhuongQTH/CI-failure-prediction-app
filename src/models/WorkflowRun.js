@@ -15,6 +15,27 @@ const WorkflowRunSchema = new mongoose.Schema({
   created_at: { type: Date, required: true },
   run_started_at: { type: Date, required: true },
   updated_at: { type: Date, required: true },
+  event: { type: String, required: true },
+  path: { type: String, required: true },
+  run_attempt: { type: Number, required: true },
+  display_title: { type: String, required: true },
+  html_url: { type: String, required: true },
+  actor: {
+    type: {
+      login: { type: String, required: true },
+      avatar_url: { type: String, required: false },
+      html_url: { type: String, required: false },
+      _id: false,
+    },
+  },
+  triggering_actor: {
+    type: {
+      login: { type: String, required: true },
+      avatar_url: { type: String, required: false },
+      html_url: { type: String, required: false },
+      _id: false,
+    },
+  },
 });
 
 // Tạo index cho user_id, workflow_id, github_workflow_id và github_run_id để truy vấn nhanh hơn

@@ -9,6 +9,7 @@ const WorkflowSchema = new mongoose.Schema({
   state: { type: String, required: true },
   created_at: { type: Date, required: true },
   updated_at: { type: Date, required: true },
+  html_url: { type: String, required: true },
 });
 
 // Tạo index cho user_id, repo_id và github_workflow_id để truy vấn nhanh hơn

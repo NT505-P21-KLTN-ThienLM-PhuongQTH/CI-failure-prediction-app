@@ -42,6 +42,7 @@ const syncWorkflowsAndRuns = async (user_id, repo, logPrefix) => {
           state: workflow.state,
           created_at: new Date(workflow.created_at),
           updated_at: new Date(workflow.updated_at),
+          html_url: workflow.html_url,
         },
         { upsert: true, new: true }
       );
@@ -94,6 +95,21 @@ const syncWorkflowsAndRuns = async (user_id, repo, logPrefix) => {
             created_at: new Date(run.created_at),
             run_started_at: new Date(run.run_started_at),
             updated_at: new Date(run.updated_at),
+            event: run.event,
+            path: run.path,
+            run_attempt: run.run_attempt,
+            display_title: run.display_title,
+            html_url: run.html_url,
+            actor: {
+              login: run.actor.login,
+              avatar_url: run.actor.avatar_url || null,
+              html_url: run.actor.html_url || null,
+            },
+            triggering_actor: {
+              login: run.triggering_actor.login,
+              avatar_url: run.triggering_actor.avatar_url || null,
+              html_url: run.triggering_actor.html_url || null,
+            }
           },
         },
         { upsert: true, new: true }

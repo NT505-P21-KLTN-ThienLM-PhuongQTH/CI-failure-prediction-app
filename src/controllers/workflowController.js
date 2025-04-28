@@ -2,6 +2,7 @@ const axios = require('axios');
 const mongoose = require('mongoose');
 const Repo = require('../models/Repo');
 const WebhookUser = require('../models/WebhookUser');
+const Workflow = require('../models/Workflow');
 const WorkflowRun = require('../models/WorkflowRun');
 const syncWorkflowsAndRuns = require('../utils/syncWorkflowsAndRuns');
 
@@ -107,13 +108,95 @@ exports.getBranchesWithRuns = async (req, res, next) => {
   }
 };
 
+exports.getWorkflows = async (req, res, next) => {
+  try {
+    const user_id = req.query.user_id;
+    const repo_id = req.query.repo_id;
+    const branch = req.query.branch;
+
+    if (!user_id || !repo_id || !branch) {
+      return res.status(400).json({ error: 'Missing user_id, repo_id, or branch' });
+    }
+
+    const userIdObject = new mongoose.Types.ObjectId(String(user_id));
+    const repoIdObject = new mongoose.Types.ObjectId(String(repo_id));
+    const repo = await Repo.findOne({ _id: repoIdObject, user_id: userIdObject });
+    if (!repo) {
+      return res.status(404).json({ error: 'Repository not found' });
+    }
+
+    // Lấy tất cả workflows của repository
+    const workflows = await Workflow.find({
+      user_id: userIdObject,
+      repo_id: repoIdObject,
+    }).lean();
+
+    // Lấy danh sách workflow_ids có workflow_runs trên nhánh được chọn
+    const workflowRuns = await WorkflowRun.find({
+      user_id: userIdObject,
+      repo_id: repoIdObject,
+      head_branch: branch,
+    }).distinct('workflow_id');
+
+    // Chỉ giữ lại các workflows có workflow_runs trên nhánh được chọn
+    const filteredWorkflows = workflows.filter(workflow =>
+      workflowRuns.some(workflowId => workflowId.toString() === workflow._id.toString())
+    );
+
+    res.status(200).json(filteredWorkflows.map(workflow => ({
+      id: workflow._id.toString(),
+      github_workflow_id: workflow.github_workflow_id,
+      name: workflow.name,
+      path: workflow.path,
+      state: workflow.state,
+      created_at: workflow.created_at,
+      updated_at: workflow.updated_at,
+      html_url: workflow.html_url,
+    })));
+  } catch (error) {
+    console.error('Error in getWorkflows:', error);
+    next(error);
+  }
+};
+
+exports.getWorkflowDetails = async (req, res, next) => {
+  try {
+    const workflow_id = req.params.id;
+
+    if (!workflow_id) {
+      return res.status(400).json({ error: 'Missing workflow_id' });
+    }
+
+    const workflowIdObject = new mongoose.Types.ObjectId(workflow_id);
+    const workflow = await Workflow.findOne({ _id: workflowIdObject }).lean();
+    if (!workflow) {
+      return res.status(404).json({ error: 'Workflow not found' });
+    }
+
+    res.status(200).json({
+      id: workflow._id.toString(),
+      github_workflow_id: workflow.github_workflow_id,
+      name: workflow.name,
+      path: workflow.path,
+      state: workflow.state,
+      created_at: workflow.created_at,
+      updated_at: workflow.updated_at,
+      html_url: workflow.html_url,
+    });
+  } catch (error) {
+    console.error('Error in getWorkflowDetails:', error);
+    next(error);
+  }
+}
+
 exports.getPipelineData = async (req, res, next) => {
   try {
     const user_id = req.query.user_id;
     const repo_id = req.query.repo_id;
     const branch = req.query.branch;
+    const workflow_id = req.query.workflow_id;
     const timeUnit = req.query.timeUnit || 'day';
-    const recentDays = parseInt(req.query.recentDays) || 7;
+    const recentDays = parseInt(req.query.recentDays) || 14;
 
     if (!user_id) {
       return res.status(400).json({ error: 'Missing user_id' });
@@ -132,6 +215,11 @@ exports.getPipelineData = async (req, res, next) => {
 
     if (branch) {
       query.head_branch = branch;
+    }
+
+    if (workflow_id) {
+      const workflowIdObject = new mongoose.Types.ObjectId(String(workflow_id));
+      query.workflow_id = workflowIdObject;
     }
 
     const runs = await WorkflowRun.find(query).lean();
@@ -193,3 +281,56 @@ exports.getPipelineData = async (req, res, next) => {
     next(error);
   }
 };
+
+exports.getPipelineStats = async (req, res, next) => {
+  try {
+    const user_id = req.query.user_id;
+    const repo_id = req.query.repo_id;
+    const branch = req.query.branch;
+    const workflow_id = req.query.workflow_id;
+
+    if (!user_id || !repo_id || !branch) {
+      return res.status(400).json({ error: 'Missing user_id, repo_id, or branch' });
+    }
+
+    const userIdObject = new mongoose.Types.ObjectId(String(user_id));
+    const repoIdObject = new mongoose.Types.ObjectId(String(repo_id));
+    const query = {
+      user_id: userIdObject,
+      repo_id: repoIdObject,
+      head_branch: branch,
+    };
+
+    if (workflow_id) {
+      const workflowIdObject = new mongoose.Types.ObjectId(String(workflow_id));
+      query.workflow_id = workflowIdObject;
+    }
+
+    const runs = await WorkflowRun.find(query).lean();
+
+    const totalRuns = runs.length;
+    const successRuns = runs.filter(run => run.conclusion === 'success').length;
+    const failedRuns = runs.filter(run => run.conclusion === 'failure').length;
+
+    // Tính success rate
+    const successRate = totalRuns > 0 ? (successRuns / totalRuns) * 100 : 0;
+
+    // Tính thời gian chạy trung bình (giả định run_duration tính bằng giây)
+    const totalRunTime = runs.reduce((sum, run) => {
+      const startTime = new Date(run.run_started_at).getTime();
+      const endTime = new Date(run.updated_at).getTime();
+      const duration = (endTime - startTime) / 1000;
+      return sum + (duration > 0 ? duration : 0);
+    }, 0);
+    const averageRunTime = totalRuns > 0 ? totalRunTime / totalRuns : 0;
+
+    res.status(200).json({
+      success_rate: successRate.toFixed(2), // Phần trăm, làm tròn 2 chữ số
+      failed_builds: failedRuns,
+      average_run_time: averageRunTime.toFixed(2), // Giây, làm tròn 2 chữ số
+    });
+  } catch (error) {
+    console.error('Error in getPipelineStats:', error);
+    next(error);
+  }
+}

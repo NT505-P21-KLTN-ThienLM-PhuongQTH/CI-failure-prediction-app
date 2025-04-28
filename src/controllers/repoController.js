@@ -1,5 +1,7 @@
 const axios = require('axios');
 const Repo = require('../models/Repo');
+const Workflow = require('../models/Workflow');
+const WorkflowRun = require('../models/WorkflowRun');
 const syncWorkflowsAndRuns = require('../utils/syncWorkflowsAndRuns');
 const crypto = require('crypto');
 
@@ -336,15 +338,30 @@ exports.updateRepo = async (req, res, next) => {
 };
 
 exports.deleteRepo = async (req, res, next) => {
+  const logPrefix = '[deleteRepo]';
   try {
     const repoId = req.params.id;
     const deletedRepo = await Repo.findOneAndDelete({ _id: repoId });
 
     if (!deletedRepo) {
+      console.log(`${logPrefix} Repository not found: ${repoId}`);
       return res.status(404).json({ error: 'Repository not found' });
     }
 
-    res.status(200).json({ message: 'Repository deleted successfully' });
+    console.log(`${logPrefix} Repository deleted successfully: ${deletedRepo.full_name}`);
+
+    const deletedWorkflows = await Workflow.deleteMany({ repo_id: repoId });
+    console.log(`${logPrefix} Deleted ${deletedWorkflows.deletedCount} workflows for repository ${repoId}`);
+
+    const deletedWorkflowsRuns = await WorkflowRun.deleteMany({ repo_id: repoId });
+    console.log(`${logPrefix} Deleted ${deletedWorkflowsRuns.deletedCount} workflow runs for repository ${repoId}`);
+
+    res.status(200).json({ 
+      message: 'Repository deleted successfully',
+      deletedRepo: deletedRepo.full_name,
+      deletedWorkflows: deletedWorkflows.deletedCount,
+      deletedWorkflowsRuns: deletedWorkflowsRuns.deletedCount
+    });
   } catch (error) {
     next(error);
   }
