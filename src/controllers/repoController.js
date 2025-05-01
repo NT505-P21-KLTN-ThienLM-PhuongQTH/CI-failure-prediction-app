@@ -4,6 +4,7 @@ const Workflow = require('../models/Workflow');
 const WorkflowRun = require('../models/WorkflowRun');
 const syncWorkflowsAndRuns = require('../utils/syncWorkflowsAndRuns');
 const crypto = require('crypto');
+const { retrieveQueue, syncQueue } = require('../utils/queue');
 
 // Hàm mã hóa token
 const encryptToken = (token) => {
@@ -23,6 +24,124 @@ const extractOwnerRepo = (url) => {
   if (!match) throw new Error('Invalid GitHub URL');
   return { owner: match[1], repo: match[2] };
 };
+
+const processRepoUpdate = async (job) => {
+  const { repoId, url, token, owner, repo, logPrefix } = job.data;
+  try {
+    const repoCheck = await Repo.findOne({ _id: repoId });
+    if (!repoCheck || repoCheck.status !== 'Pending') {
+      console.log(`${logPrefix} Repository ${owner}/${repo} is no longer in Pending state. Skipping API call.`);
+      return;
+    }
+
+    console.log(`${logPrefix} Calling /retrieve for ${owner}/${repo}`);
+    const retrieveResponse = await axios.post(
+      'http://localhost:4567/retrieve',
+      { url, token },
+      { timeout: 600000, headers: { 'Content-Type': 'application/json' } }
+    );
+
+    console.log(`${logPrefix} /retrieve response:`, retrieveResponse.data);
+
+    if (retrieveResponse.status !== 200) {
+      throw new Error(`Failed to retrieve repository from GitHub: ${retrieveResponse.statusText}`);
+    }
+
+    const retrieveData = retrieveResponse.data;
+    if (retrieveData.status !== 'success') {
+      throw new Error(retrieveData.message || 'Retrieve API failed');
+    }
+
+    console.log(`${logPrefix} Calling /repos/${owner}/${repo}`);
+    const repoResponse = await axios.get(
+      `http://localhost:4567/repos/${owner}/${repo}`,
+      { timeout: 600000 }
+    );
+
+    console.log(`${logPrefix} /repos response:`, repoResponse.data);
+
+    if (repoResponse.status !== 200) {
+      throw new Error(`Failed to fetch repository details from ghtorrent: ${repoResponse.statusText}`);
+    }
+
+    const repoDetails = repoResponse.data;
+
+    if (!repoDetails.id) {
+      throw new Error('Repository ID not found in response');
+    }
+
+    const encryptedToken = encryptToken(token);
+
+    const updatedRepo = await Repo.findOneAndUpdate(
+      { _id: repoId },
+      {
+        github_repo_id: repoDetails.id,
+        full_name: repoDetails.full_name || `${owner}/${repo}`,
+        owner: {
+          id: repoDetails.owner.id,
+          login: repoDetails.owner.login,
+          avatar_url: repoDetails.owner.avatar_url,
+        },
+        name: repoDetails.name,
+        token: encryptedToken,
+        status: 'Success',
+        private: repoDetails.private,
+        html_url: repoDetails.html_url || url,
+        homepage: repoDetails.homepage,
+        pushed_at: repoDetails.pushed_at ? new Date(repoDetails.pushed_at) : null,
+        default_branch: repoDetails.default_branch,
+        language: repoDetails.language,
+        stargazers_count: repoDetails.stargazers_count,
+        forks_count: repoDetails.forks_count,
+        watchers_count: repoDetails.watchers_count,
+        open_issues_count: repoDetails.open_issues_count,
+        permissions: {
+          admin: repoDetails.permissions ? repoDetails.permissions.admin : false,
+          push: repoDetails.permissions ? repoDetails.permissions.push : false,
+          pull: repoDetails.permissions ? repoDetails.permissions.pull : false,
+        },
+      },
+      { new: true }
+    );
+
+    console.log(`${logPrefix} Repository processed successfully: ${updatedRepo.full_name}`);
+
+    // Đẩy công việc đồng bộ workflows và runs vào syncQueue
+    await syncQueue.add({
+      user_id: repoCheck.user_id,
+      repo: updatedRepo,
+      logPrefix,
+    });
+  } catch (error) {
+    console.error(`${logPrefix} Error in retrieveQueue: ${error.message}`);
+    if (error.response) {
+      console.error(`${logPrefix} Response data: ${JSON.stringify(error.response.data)}`);
+      console.error(`${logPrefix} Response status: ${error.response.status}`);
+    }
+    if (error.request) {
+      console.error(`${logPrefix} No response received from server`);
+    }
+    console.error(`${logPrefix} Error stack: ${error.stack}`);
+
+    await Repo.findOneAndUpdate({ _id: repoId }, { status: 'Failed' }, { new: true });
+  }
+};
+
+// Worker xử lý retrieveQueue
+retrieveQueue.process(processRepoUpdate);
+
+// Worker xử lý syncQueue
+syncQueue.process(async (job) => {
+  const { user_id, repo, logPrefix } = job.data;
+  try {
+    console.log(`${logPrefix} Syncing workflows and runs for repository ${repo.full_name}`);
+    await syncWorkflowsAndRuns(user_id, repo, logPrefix);
+    console.log(`${logPrefix} Successfully synced workflows and runs for ${repo.full_name}`);
+  } catch (error) {
+    console.error(`${logPrefix} Error in syncQueue: ${error.message}`);
+    console.error(`${logPrefix} Error stack: ${error.stack}`);
+  }
+});
 
 exports.addRepo = async (req, res, next) => {
   const logPrefix = '[addRepo]';
@@ -85,114 +204,123 @@ exports.addRepo = async (req, res, next) => {
       status: pendingRepo.status,
     });
 
-    setTimeout(async () => {
-      try {
-        const repoCheck = await Repo.findOne({ _id: pendingRepo._id });
-        if (!repoCheck || repoCheck.status !== 'Pending') {
-          console.log(`${logPrefix} Repository ${full_name} is no longer in Pending state. Skipping API call.`);
-          return;
-        }
+    await retrieveQueue.add({
+      repoId: pendingRepo._id,
+      url,
+      token,
+      owner,
+      repo,
+      logPrefix,
+    });
 
-        const decryptedToken = repoCheck.decryptToken();
+    // setTimeout(async () => {
+    //   try {
+    //     const repoCheck = await Repo.findOne({ _id: pendingRepo._id });
+    //     if (!repoCheck || repoCheck.status !== 'Pending') {
+    //       console.log(`${logPrefix} Repository ${full_name} is no longer in Pending state. Skipping API call.`);
+    //       return;
+    //     }
 
-        console.log(`${logPrefix} Calling /retrieve for ${owner}/${repo}`);
-        const retrieveResponse = await axios.post(
-          'http://localhost:4567/retrieve',
-          { url, token: decryptedToken },
-          {
-            timeout: 600000,
-            headers: {
-              'Content-Type': 'application/json',
-            },
-          }
-        );
+    //     const decryptedToken = repoCheck.decryptToken();
 
-        console.log(`${logPrefix} /retrieve response:`, retrieveResponse.data);
+    //     console.log(`${logPrefix} Calling /retrieve for ${owner}/${repo}`);
+    //     const retrieveResponse = await axios.post(
+    //       'http://localhost:4567/retrieve',
+    //       { url, token: decryptedToken },
+    //       {
+    //         timeout: 600000,
+    //         headers: {
+    //           'Content-Type': 'application/json',
+    //         },
+    //       }
+    //     );
 
-        if (retrieveResponse.status !== 200) {
-          throw new Error(`Failed to retrieve repository from GitHub: ${retrieveResponse.statusText}`);
-        }
+    //     console.log(`${logPrefix} /retrieve response:`, retrieveResponse.data);
 
-        const retrieveData = retrieveResponse.data;
-        if (retrieveData.status !== 'success') {
-          throw new Error(retrieveData.message || 'Retrieve API failed');
-        }
+    //     if (retrieveResponse.status !== 200) {
+    //       throw new Error(`Failed to retrieve repository from GitHub: ${retrieveResponse.statusText}`);
+    //     }
 
-        console.log(`${logPrefix} Calling /repos/${owner}/${repo}`);
-        const repoResponse = await axios.get(
-          `http://localhost:4567/repos/${owner}/${repo}`,
-          { timeout: 600000 }
-        );
+    //     const retrieveData = retrieveResponse.data;
+    //     if (retrieveData.status !== 'success') {
+    //       throw new Error(retrieveData.message || 'Retrieve API failed');
+    //     }
 
-        console.log(`${logPrefix} /repos response:`, repoResponse.data);
+    //     console.log(`${logPrefix} Calling /repos/${owner}/${repo}`);
+    //     const repoResponse = await axios.get(
+    //       `http://localhost:4567/repos/${owner}/${repo}`,
+    //       { timeout: 600000 }
+    //     );
 
-        if (repoResponse.status !== 200) {
-          throw new Error(`Failed to fetch repository details from ghtorrent: ${repoResponse.statusText}`);
-        }
+    //     console.log(`${logPrefix} /repos response:`, repoResponse.data);
 
-        const repoData = repoResponse.data;
-        const repoDetails = repoData;
+    //     if (repoResponse.status !== 200) {
+    //       throw new Error(`Failed to fetch repository details from ghtorrent: ${repoResponse.statusText}`);
+    //     }
 
-        if (!repoDetails.id) {
-          throw new Error('Repository ID not found in response');
-        }
+    //     const repoData = repoResponse.data;
+    //     const repoDetails = repoData;
 
-        const encryptedToken = encryptToken(token);
+    //     if (!repoDetails.id) {
+    //       throw new Error('Repository ID not found in response');
+    //     }
 
-        const updatedRepo = await Repo.findOneAndUpdate(
-          { _id: pendingRepo._id },
-          {
-            github_repo_id: repoDetails.id,
-            full_name: repoDetails.full_name || `${owner}/${repo}`,
-            owner: {
-              id: repoDetails.owner.id,
-              login: repoDetails.owner.login,
-              avatar_url: repoDetails.owner.avatar_url,
-            },
-            name: repoDetails.name,
-            token: encryptedToken,
-            status: 'Success',
-            private: repoDetails.private,
-            html_url: repoDetails.html_url || url,
-            homepage: repoDetails.homepage,
-            pushed_at: repoDetails.pushed_at ? new Date(repoDetails.pushed_at) : null,
-            default_branch: repoDetails.default_branch,
-            language: repoDetails.language,
-            stargazers_count: repoDetails.stargazers_count,
-            forks_count: repoDetails.forks_count,
-            watchers_count: repoDetails.watchers_count,
-            open_issues_count: repoDetails.open_issues_count,
-            permissions: {
-              admin: repoDetails.permissions ? repoDetails.permissions.admin : false,
-              push: repoDetails.permissions ? repoDetails.permissions.push : false,
-              pull: repoDetails.permissions ? repoDetails.permissions.pull : false,
-            },
-          },
-          { new: true }
-        );
+    //     const encryptedToken = encryptToken(token);
 
-        console.log(`${logPrefix} Repository added successfully: ${repoDetails.id}`);
+    //     const updatedRepo = await Repo.findOneAndUpdate(
+    //       { _id: pendingRepo._id },
+    //       {
+    //         github_repo_id: repoDetails.id,
+    //         full_name: repoDetails.full_name || `${owner}/${repo}`,
+    //         owner: {
+    //           id: repoDetails.owner.id,
+    //           login: repoDetails.owner.login,
+    //           avatar_url: repoDetails.owner.avatar_url,
+    //         },
+    //         name: repoDetails.name,
+    //         token: encryptedToken,
+    //         status: 'Success',
+    //         private: repoDetails.private,
+    //         html_url: repoDetails.html_url || url,
+    //         homepage: repoDetails.homepage,
+    //         pushed_at: repoDetails.pushed_at ? new Date(repoDetails.pushed_at) : null,
+    //         default_branch: repoDetails.default_branch,
+    //         language: repoDetails.language,
+    //         stargazers_count: repoDetails.stargazers_count,
+    //         forks_count: repoDetails.forks_count,
+    //         watchers_count: repoDetails.watchers_count,
+    //         open_issues_count: repoDetails.open_issues_count,
+    //         permissions: {
+    //           admin: repoDetails.permissions ? repoDetails.permissions.admin : false,
+    //           push: repoDetails.permissions ? repoDetails.permissions.push : false,
+    //           pull: repoDetails.permissions ? repoDetails.permissions.pull : false,
+    //         },
+    //       },
+    //       { new: true }
+    //     );
 
-        // Đồng bộ workflows và runs ngay sau khi trạng thái là Success
-        await syncWorkflowsAndRuns(user_id, updatedRepo, logPrefix);
-      } catch (error) {
-        console.error(`${logPrefix} Error: ${error.message}`);
-        if (error.response) {
-          console.error(`${logPrefix} Response data: ${JSON.stringify(error.response.data)}`);
-          console.error(`${logPrefix} Response status: ${error.response.status}`);
-        }
-        if (error.request) {
-          console.error(`${logPrefix} No response received from server`);
-        }
-        console.error(`${logPrefix} Error stack: ${error.stack}`);
+    //     console.log(`${logPrefix} Repository added successfully: ${repoDetails.id}`);
 
-        await Repo.findOneAndUpdate(
-          { _id: pendingRepo._id },
-          { status: 'Failed' },
-          { new: true }
-        );
-      }
-    }, 0);
+    //     // Đồng bộ workflows và runs ngay sau khi trạng thái là Success
+    //     await syncWorkflowsAndRuns(user_id, updatedRepo, logPrefix);
+    //   } catch (error) {
+    //     console.error(`${logPrefix} Error: ${error.message}`);
+    //     if (error.response) {
+    //       console.error(`${logPrefix} Response data: ${JSON.stringify(error.response.data)}`);
+    //       console.error(`${logPrefix} Response status: ${error.response.status}`);
+    //     }
+    //     if (error.request) {
+    //       console.error(`${logPrefix} No response received from server`);
+    //     }
+    //     console.error(`${logPrefix} Error stack: ${error.stack}`);
+
+    //     await Repo.findOneAndUpdate(
+    //       { _id: pendingRepo._id },
+    //       { status: 'Failed' },
+    //       { new: true }
+    //     );
+    //   }
+    // }, 0);
   } catch (error) {
     console.error(`${logPrefix} Error: ${error.message}`);
     if (error.response) {
@@ -252,82 +380,91 @@ exports.updateRepo = async (req, res, next) => {
       status: pendingRepo.status,
     });
 
-    setTimeout(async () => {
-      try {
-        console.log(`${logPrefix} Calling /repos/${owner}/${repo}`);
-        const repoResponse = await axios.get(
-          `http://localhost:4567/repos/${owner}/${repo}`,
-          { timeout: 600000 }
-        );
+    await retrieveQueue.add({
+      repoId: pendingRepo._id,
+      url,
+      token,
+      owner,
+      repo,
+      logPrefix,
+    });
 
-        console.log(`${logPrefix} /repos response:`, repoResponse.data);
+    // setTimeout(async () => {
+    //   try {
+    //     console.log(`${logPrefix} Calling /repos/${owner}/${repo}`);
+    //     const repoResponse = await axios.get(
+    //       `http://localhost:4567/repos/${owner}/${repo}`,
+    //       { timeout: 600000 }
+    //     );
 
-        if (repoResponse.status !== 200) {
-          throw new Error(`Failed to fetch repository details from ghtorrent: ${repoResponse.statusText}`);
-        }
+    //     console.log(`${logPrefix} /repos response:`, repoResponse.data);
 
-        const repoData = repoResponse.data;
-        const repoDetails = repoData;
+    //     if (repoResponse.status !== 200) {
+    //       throw new Error(`Failed to fetch repository details from ghtorrent: ${repoResponse.statusText}`);
+    //     }
 
-        const encryptedToken = encryptToken(token);
+    //     const repoData = repoResponse.data;
+    //     const repoDetails = repoData;
 
-        const updatedRepo = await Repo.findOneAndUpdate(
-          { _id: repoId },
-          {
-            full_name: repoDetails.full_name || `${owner}/${repo}`,
-            owner: {
-              id: repoDetails.owner.id,
-              login: repoDetails.owner.login,
-              avatar_url: repoDetails.owner.avatar_url,
-            },
-            name: repoDetails.name,
-            token: encryptedToken,
-            status: 'Success',
-            private: repoDetails.private,
-            html_url: repoDetails.html_url || url,
-            homepage: repoDetails.homepage,
-            pushed_at: repoDetails.pushed_at ? new Date(repoDetails.pushed_at) : null,
-            default_branch: repoDetails.default_branch,
-            language: repoDetails.language,
-            stargazers_count: repoDetails.stargazers_count,
-            forks_count: repoDetails.forks_count,
-            watchers_count: repoDetails.watchers_count,
-            open_issues_count: repoDetails.open_issues_count,
-            permissions: {
-              admin: repoDetails.permissions ? repoDetails.permissions.admin : false,
-              push: repoDetails.permissions ? repoDetails.permissions.push : false,
-              pull: repoDetails.permissions ? repoDetails.permissions.pull : false,
-            },
-          },
-          { new: true }
-        );
+    //     const encryptedToken = encryptToken(token);
 
-        if (!updatedRepo) {
-          throw new Error('Repository not found');
-        }
+    //     const updatedRepo = await Repo.findOneAndUpdate(
+    //       { _id: repoId },
+    //       {
+    //         full_name: repoDetails.full_name || `${owner}/${repo}`,
+    //         owner: {
+    //           id: repoDetails.owner.id,
+    //           login: repoDetails.owner.login,
+    //           avatar_url: repoDetails.owner.avatar_url,
+    //         },
+    //         name: repoDetails.name,
+    //         token: encryptedToken,
+    //         status: 'Success',
+    //         private: repoDetails.private,
+    //         html_url: repoDetails.html_url || url,
+    //         homepage: repoDetails.homepage,
+    //         pushed_at: repoDetails.pushed_at ? new Date(repoDetails.pushed_at) : null,
+    //         default_branch: repoDetails.default_branch,
+    //         language: repoDetails.language,
+    //         stargazers_count: repoDetails.stargazers_count,
+    //         forks_count: repoDetails.forks_count,
+    //         watchers_count: repoDetails.watchers_count,
+    //         open_issues_count: repoDetails.open_issues_count,
+    //         permissions: {
+    //           admin: repoDetails.permissions ? repoDetails.permissions.admin : false,
+    //           push: repoDetails.permissions ? repoDetails.permissions.push : false,
+    //           pull: repoDetails.permissions ? repoDetails.permissions.pull : false,
+    //         },
+    //       },
+    //       { new: true }
+    //     );
 
-        console.log(`${logPrefix} Repository updated successfully: ${repoDetails.id}`);
+    //     if (!updatedRepo) {
+    //       throw new Error('Repository not found');
+    //     }
 
-        // Đồng bộ workflows và runs sau khi cập nhật thành công
-        await syncWorkflowsAndRuns(pendingRepo.user_id, updatedRepo, logPrefix);
-      } catch (error) {
-        console.error(`${logPrefix} Error: ${error.message}`);
-        if (error.response) {
-          console.error(`${logPrefix} Response data: ${JSON.stringify(error.response.data)}`);
-          console.error(`${logPrefix} Response status: ${error.response.status}`);
-        }
-        if (error.request) {
-          console.error(`${logPrefix} No response received from server`);
-        }
-        console.error(`${logPrefix} Error stack: ${error.stack}`);
+    //     console.log(`${logPrefix} Repository updated successfully: ${repoDetails.id}`);
 
-        await Repo.findOneAndUpdate(
-          { github_repo_id: repoId },
-          { status: 'Failed' },
-          { new: true }
-        );
-      }
-    }, 0);
+    //     // Đồng bộ workflows và runs sau khi cập nhật thành công
+    //     await syncWorkflowsAndRuns(pendingRepo.user_id, updatedRepo, logPrefix);
+    //   } catch (error) {
+    //     console.error(`${logPrefix} Error: ${error.message}`);
+    //     if (error.response) {
+    //       console.error(`${logPrefix} Response data: ${JSON.stringify(error.response.data)}`);
+    //       console.error(`${logPrefix} Response status: ${error.response.status}`);
+    //     }
+    //     if (error.request) {
+    //       console.error(`${logPrefix} No response received from server`);
+    //     }
+    //     console.error(`${logPrefix} Error stack: ${error.stack}`);
+
+    //     await Repo.findOneAndUpdate(
+    //       { github_repo_id: repoId },
+    //       { status: 'Failed' },
+    //       { new: true }
+    //     );
+    //   }
+    // }, 0);
   } catch (error) {
     console.error(`${logPrefix} Error: ${error.message}`);
     if (error.response) {
