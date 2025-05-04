@@ -36,7 +36,7 @@ const WorkflowRunSchema = new mongoose.Schema({
       _id: false,
     },
   },
-});
+}, { timestamps: true });
 
 // Tạo index cho user_id, workflow_id, github_workflow_id và github_run_id để truy vấn nhanh hơn
 // WorkflowRunSchema.index({ user_id: 1, workflow_id: 1, github_workflow_id: 1, github_run_id: 1 });

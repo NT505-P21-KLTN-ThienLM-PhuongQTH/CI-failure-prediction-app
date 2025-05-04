@@ -5,12 +5,14 @@ const authRoutes = require('./auth');
 const repoRoutes = require('./repo');
 const workflowRoutes = require('./workflow');
 const webhookRoutes = require('./webhook');
-const webhookUserRoutes = require('./webhookUser');
+const userRoutes = require('./user');
+const userDataRoutes = require('./userData');
 
 router.use('/auth', authRoutes);
 router.use('/repos', repoRoutes);
 router.use('/', workflowRoutes);
-router.use('/webhook-user', webhookUserRoutes);
-router.use('/webhook', webhookRoutes);
+router.use('/webhooks', webhookRoutes);
+router.use('/user', userRoutes);
+router.use('/userdata', userDataRoutes);
 
 module.exports = router;

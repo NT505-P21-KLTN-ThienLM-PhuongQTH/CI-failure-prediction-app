@@ -10,6 +10,7 @@ const RepoSchema = new mongoose.Schema({
       id: { type: Number, required: true },
       login: { type: String, required: true },
       avatar_url: { type: String, required: false },
+      _id: false,
     },
     required: true,
   },
@@ -33,9 +34,15 @@ const RepoSchema = new mongoose.Schema({
       admin: { type: Boolean, required: true },
       push: { type: Boolean, required: true },
       pull: { type: Boolean, required: true },
+      _id: false,
     },
   },
-});
+  webhook: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Webhook",
+    required: false,
+  },
+}, { timestamps: true });
 
 // Mã hóa token trước khi lưu
 RepoSchema.pre('save', function(next) {

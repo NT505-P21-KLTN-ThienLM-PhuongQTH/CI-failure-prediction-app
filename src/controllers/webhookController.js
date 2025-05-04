@@ -1,144 +1,468 @@
-const Repo = require('../models/Repo');
-const Workflow = require('../models/Workflow');
-const WorkflowRun = require('../models/WorkflowRun');
-const WebhookUser = require('../models/WebhookUser');
-const { callRubyAPI } = require('../utils/rubyClient');
+const crypto = require("crypto");
+const axios = require("axios");
+const { retrieveQueue, syncQueue } = require("../utils/queue");
+const Repo = require("../models/Repo");
+const Webhook = require("../models/Webhook");
 
-exports.handleWorkflowRun = async (req, res, next) => {
-  const logPrefix = '[handleWorkflowRun]';
-  console.log(`${logPrefix} Received webhook request`);
+// Hàm mã hóa webhook_secret
+const encryptWebhookSecret = (secret) => {
+  const secretKey = process.env.ENCRYPTION_SECRET;
+  const key = crypto.createHash("sha256").update(secretKey).digest();
+  const iv = Buffer.alloc(16, 0);
+  const cipher = crypto.createCipheriv("aes-256-cbc", key, iv);
+  let encrypted = cipher.update(secret, "utf8", "hex");
+  encrypted += cipher.final("hex");
+  return encrypted;
+};
 
+// Hàm giải mã webhook_secret (dùng để hiển thị ẩn)
+const decryptWebhookSecret = (encryptedSecret) => {
+  const secretKey = process.env.ENCRYPTION_SECRET;
+  const key = crypto.createHash("sha256").update(secretKey).digest();
+  const iv = Buffer.alloc(16, 0);
+  const decipher = crypto.createDecipheriv("aes-256-cbc", key, iv);
+  let decrypted = decipher.update(encryptedSecret, "hex", "utf8");
+  decrypted += decipher.final("utf8");
+  return decrypted;
+};
+
+exports.verifyWebhook = async (req, res, next) => {
+  const logPrefix = "[Webhook]";
+  const signature = req.headers["x-hub-signature-256"];
+  if (!signature) {
+    console.log(`${logPrefix} No signature provided`);
+    return res.status(401).json({ error: "No signature provided" });
+  }
+
+  const payload = req.body;
+  console.log(`${logPrefix} Payload received:`, payload);
+
+  // Lấy repository ID từ payload
+  const repoId = payload.workflow_run?.head_repository?.id || payload.repository?.id;
+  if (!repoId) {
+    console.log(`${logPrefix} Missing repository ID in payload`);
+    return res.status(400).json({ error: "Missing repository ID in payload" });
+  }
+
+  // Tìm tất cả Repo có github_repo_id khớp
+  const repos = await Repo.find({ github_repo_id: repoId });
+  if (!repos || repos.length === 0) {
+    console.log(`${logPrefix} Repository not found for github_repo_id=${repoId}`);
+    return res.status(404).json({ 
+      error: "Repository not found",
+      details: `No repo found with github_repo_id ${repoId}`
+    });
+  }
+
+  // Tìm tất cả Webhook liên quan đến các Repo này
+  const repoIds = repos.map(repo => repo._id);
+  const webhooks = await Webhook.find({ repo_id: { $in: repoIds } });
+  if (!webhooks || webhooks.length === 0) {
+    console.log(`${logPrefix} Webhook not configured for github_repo_id=${repoId}`);
+    return res.status(401).json({ 
+      error: "Webhook not configured for this repository",
+      details: `No webhook found for github_repo_id ${repoId}`
+    });
+  }
+
+  // Kiểm tra chữ ký HMAC với từng Webhook để tìm webhook hợp lệ
+  let matchedWebhook = null;
+  let matchedRepo = null;
+  for (const webhook of webhooks) {
+    if (!webhook.active) {
+      console.log(`${logPrefix} Webhook inactive for repo_id=${webhook.repo_id}, active=${webhook.active}`);
+      continue;
+    }
+
+    if (webhook.status !== "Configured") {
+      console.log(`${logPrefix} Webhook configuration failed for repo_id=${webhook.repo_id}, status=${webhook.status}`);
+      continue;
+    }
+
+    const secret = decryptWebhookSecret(webhook.webhook_secret);
+    const digest = `sha256=${crypto.createHmac("sha256", secret).update(JSON.stringify(payload)).digest("hex")}`;
+
+    if (crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(signature))) {
+      matchedWebhook = webhook;
+      matchedRepo = repos.find(repo => repo._id.toString() === webhook.repo_id.toString());
+      break;
+    }
+  }
+
+  if (!matchedWebhook || !matchedRepo) {
+    console.log(`${logPrefix} No matching webhook found for github_repo_id=${repoId}`);
+    return res.status(401).json({ 
+      error: "Invalid signature or no matching webhook",
+      details: `No webhook matched for github_repo_id ${repoId}`
+    });
+  }
+
+  req.repo = matchedRepo;
+  req.webhook = matchedWebhook;
+  next();
+};
+
+exports.handleWebhook = async (req, res) => {
+  const logPrefix = "[Webhook]";
   try {
-    // Lấy URL webhook từ request
-    const webhookUrl = req.originalUrl;
-    console.log(`${logPrefix} Webhook URL: ${webhookUrl}`);
+    const payload = req.body;
+    console.log(`${logPrefix} Received webhook payload:`, payload);
 
-    // Tìm user_id dựa trên webhook URL
-    const webhookUser = await WebhookUser.findOne({ webhook_url: webhookUrl }).populate('user_id');
-    if (!webhookUser) {
-      console.warn(`${logPrefix} No user found for webhook URL: ${webhookUrl}`);
-      return res.status(404).json({ error: 'User not found for this webhook', code: 'USER_NOT_FOUND' });
+    const repo = req.repo;
+
+    const repoId = repo._id;
+    const user_id = repo.user_id;
+    const url = repo.html_url;
+    const token = repo.decryptToken();
+    const owner = repo.owner.login;
+    const repoName = repo.name;
+
+    // Đặt trạng thái của repo thành Pending trước khi xử lý
+    await Repo.findOneAndUpdate(
+      { _id: repoId },
+      { status: "Pending" },
+      { new: true }
+    );
+    console.log(`${logPrefix} Repository ${repo.full_name} set to Pending state for processing`);
+
+    // Đẩy công việc vào retrieveQueue
+    await retrieveQueue.add({
+      repoId: repoId,
+      url,
+      token,
+      owner,
+      repo: repoName,
+      logPrefix,
+    });
+
+    // Đẩy công việc đồng bộ vào syncQueue
+    await syncQueue.add({
+      user_id,
+      repo,
+      logPrefix,
+    });
+
+    res.status(200).json({ message: "Webhook queued for processing" });
+  } catch (error) {
+    console.error(`${logPrefix} Error processing webhook: ${error.message}`);
+    if (error.response) {
+      console.error(`${logPrefix} Response data: ${JSON.stringify(error.response.data)}`);
+      console.error(`${logPrefix} Response status: ${error.response.status}`);
     }
 
-    const user_id = webhookUser.user_id._id;
-    console.log(`${logPrefix} Processing for user: ${user_id}`);
-
-    // Lấy danh sách tất cả repos của user
-    const repos = await Repo.find({ user_id });
-    if (!repos || repos.length === 0) {
-      console.warn(`${logPrefix} No repositories found for user: ${user_id}`);
-      return res.status(404).json({ error: 'No repositories found for this user', code: 'NO_REPOS_FOUND' });
+    // Cập nhật trạng thái repo thành Failed nếu có lỗi
+    if (req.repo) {
+      await Repo.findOneAndUpdate(
+        { _id: req.repo._id },
+        { status: "Failed" },
+        { new: true }
+      ).then(() => console.log(`${logPrefix} Repository ${req.repo.full_name} set to Failed state`));
     }
 
-    // Gọi /retrieve cho từng repo để cập nhật DB ghtorrent
-    for (const repo of repos) {
-      const url = `https://github.com/${repo.owner.login}/${repo.name}`;
-      const token = repo.decryptToken();
+    res.status(500).json({ error: "Failed to process webhook", details: error.message });
+  }
+};
 
-      console.log(`${logPrefix} Calling /retrieve for repo: ${url}`);
-      await callRubyAPI('/retrieve', 'POST', { url, token });
+// Kiểm tra trạng thái webhook
+exports.checkWebhook = async (req, res, next) => {
+  const logPrefix = "[checkWebhook]";
+  try {
+    const { repo_id } = req.query;
+
+    if (!repo_id) {
+      return res.status(400).json({ error: "Missing repo_id" });
     }
 
-    // Đồng bộ dữ liệu từ DB ghtorrent vào DB app
-    for (const repo of repos) {
-      const owner = repo.owner.login;
-      const repo_name = repo.name;
-
-      console.log(`${logPrefix} Syncing data for repo: ${repo_name}`);
-      const rubyData = await callRubyAPI(`/sync-data?owner=${owner}&repo=${repo_name}`, 'GET');
-      const { workflows: workflowsData, workflow_runs: runsData } = rubyData;
-
-      // Chuẩn bị bulk operations cho workflows
-      const workflowOps = [];
-      const workflowIdMap = new Map();
-
-      for (const workflow of workflowsData) {
-        if (!workflow.github_id) {
-          console.warn(`${logPrefix} Workflow github_id not found in response: ${JSON.stringify(workflow)}`);
-          continue;
-        }
-
-        workflowOps.push({
-          updateOne: {
-            filter: { user_id, repo_id: repo._id, github_workflow_id: workflow.github_id },
-            update: {
-              $set: {
-                user_id,
-                github_workflow_id: workflow.github_id, // Lưu github_id từ ghtorrent
-                repo_id: repo._id,
-                name: workflow.name,
-                path: workflow.path,
-                state: workflow.state,
-                created_at: new Date(workflow.created_at),
-                updated_at: new Date(workflow.updated_at),
-              },
-            },
-            upsert: true,
-          },
-        });
-      }
-
-      if (workflowOps.length > 0) {
-        console.log(`${logPrefix} Executing bulk write for ${workflowOps.length} workflows in repo ${repo_name}`);
-        await Workflow.bulkWrite(workflowOps);
-      }
-
-      // Lấy lại workflows để ánh xạ github_workflow_id sang _id
-      const savedWorkflows = await Workflow.find({ user_id, repo_id: repo._id });
-      for (const wf of savedWorkflows) {
-        workflowIdMap.set(wf.github_workflow_id, wf._id); // Ánh xạ github_workflow_id -> MongoDB _id
-      }
-
-      // Chuẩn bị bulk operations cho workflow runs
-      const runOps = [];
-      for (const run of runsData) {
-        if (!run.workflow_id || !run.github_id) {
-          console.warn(`${logPrefix} Workflow run data incomplete: ${JSON.stringify(run)}`);
-          continue;
-        }
-
-        // Tìm _id của Workflow dựa trên workflow_id (github_id của workflow)
-        const workflowMongoId = workflowIdMap.get(Number(run.workflow_id));
-        if (!workflowMongoId) {
-          console.warn(`${logPrefix} Workflow ${run.workflow_id} not found for run ${run.github_id} in repo ${repo_name}`);
-          continue;
-        }
-
-        runOps.push({
-          updateOne: {
-            filter: { user_id, github_run_id: run.github_id },
-            update: {
-              $set: {
-                user_id,
-                github_run_id: run.github_id, // Lưu github_id của run
-                github_workflow_id: run.workflow_id, // Lưu github_id của workflow từ ghtorrent
-                workflow_id: workflowMongoId, // Tham chiếu đến _id của Workflow
-                name: run.name,
-                head_branch: run.head_branch,
-                head_sha: run.head_sha,
-                run_number: run.run_number,
-                status: run.status,
-                conclusion: run.conclusion || null, // Đảm bảo conclusion có thể là null
-                created_at: new Date(run.created_at),
-                run_started_at: new Date(run.run_started_at),
-                updated_at: new Date(run.updated_at),
-              },
-            },
-            upsert: true,
-          },
-        });
-      }
-
-      if (runOps.length > 0) {
-        console.log(`${logPrefix} Executing bulk write for ${runOps.length} workflow runs in repo ${repo_name}`);
-        await WorkflowRun.bulkWrite(runOps);
-      }
+    const webhook = await Webhook.findOne({ repo_id });
+    if (!webhook) {
+      return res.status(200).json({ exists: false, active: false });
     }
 
-    console.log(`${logPrefix} Webhook processed successfully for user ${user_id}`);
-    res.status(200).json({ message: 'Webhook processed successfully' });
+    res.status(200).json({ exists: true, active: webhook.active });
   } catch (error) {
     console.error(`${logPrefix} Error: ${error.message}`);
+    next(error);
+  }
+};
+
+// Lấy danh sách webhook đã cấu hình
+exports.listWebhooks = async (req, res, next) => {
+  const logPrefix = "[listWebhooks]";
+  try {
+    const { user_id } = req.query;
+
+    if (!user_id) {
+      return res.status(400).json({ error: "Missing user_id" });
+    }
+
+    const repos = await Repo.find({ user_id }).select("_id github_repo_id full_name owner name");
+    const webhooks = await Webhook.find({ repo_id: { $in: repos.map((r) => r._id) } }).select(
+      "repo_id active webhook_secret webhook_url events github_webhook_id status"
+    );
+
+    const webhookList = webhooks.map((w) => {
+      const repo = repos.find((r) => r._id.toString() === w.repo_id.toString());
+      return {
+        repo_id: w.repo_id,
+        full_name: repo ? repo.full_name : "Unknown Repository",
+        owner: repo ? repo.owner.login : "Unknown",
+        name: repo ? repo.name : "Unknown",
+        active: w.active,
+        webhook_secret: decryptWebhookSecret(w.webhook_secret), // Giải mã để hiển thị ẩn
+        webhook_url: w.webhook_url,
+        events: w.events,
+        github_webhook_id: w.github_webhook_id,
+        status: w.status,
+      };
+    });
+
+    res.status(200).json(webhookList);
+  } catch (error) {
+    console.error(`${logPrefix} Error: ${error.message}`);
+    next(error);
+  }
+};
+
+exports.configureWebhook = async (req, res, next) => {
+  const logPrefix = "[configureWebhook]";
+  try {
+    const { repo_id, webhook_secret, active } = req.body;
+
+    if (!repo_id) {
+      return res.status(400).json({ error: "Missing repo_id" });
+    }
+
+    const repo = await Repo.findById(repo_id);
+    if (!repo) {
+      return res.status(404).json({ error: "Repository not found" });
+    }
+    const owner = repo.owner.login;
+    const name = repo.name;
+    const user_id = repo.user_id;
+
+    let webhook = await Webhook.findOne({ repo_id });
+
+    if (active) {
+      if (!webhook_secret) {
+        return res.status(400).json({ error: "Webhook secret is required when enabling webhook" });
+      }
+
+      const encryptedSecret = encryptWebhookSecret(webhook_secret);
+
+      if (webhook) {
+        webhook = await Webhook.findOneAndUpdate(
+          { repo_id },
+          { webhook_secret: encryptedSecret, active: true, status: "Pending", user_id },
+          { new: true }
+        );
+      } else {
+        webhook = new Webhook({
+          repo_id,
+          user_id,
+          webhook_secret: encryptedSecret,
+          webhook_url: process.env.WEBHOOK_URL || "http://localhost:5000/api/webhook",
+          events: ["push", "workflow_run"],
+          active: true,
+          status: "Pending",
+        });
+        await webhook.save();
+      }
+
+      // Debug token
+      const decryptedToken = repo.decryptToken();
+      console.log(`${logPrefix} Using token: ${decryptedToken.substring(0, 5)}...`);
+
+      // Gọi API GitHub để tạo webhook
+      const response = await axios.post(
+        `https://api.github.com/repos/${owner}/${name}/hooks`,
+        {
+          name: "web",
+          active: true,
+          events: ["push", "workflow_run"],
+          config: {
+            url: process.env.WEBHOOK_URL || "http://localhost:5000/api/webhook",
+            content_type: "json",
+            secret: webhook_secret,
+          },
+        },
+        {
+          headers: {
+            Authorization: `token ${decryptedToken}`,
+            Accept: "application/vnd.github.v3+json",
+          },
+        }
+      );
+
+      if (response.data && response.data.id) {
+        await Webhook.findOneAndUpdate(
+          { repo_id },
+          { github_webhook_id: response.data.id, status: "Configured", user_id },
+          { new: true }
+        );
+      } else {
+        throw new Error("Failed to create webhook on GitHub");
+      }
+    } else {
+      if (webhook) {
+        await Webhook.findOneAndUpdate({ repo_id }, { active: false, status: "Failed" });
+        const decryptedToken = repo.decryptToken();
+        if (webhook.github_webhook_id) {
+          await axios.delete(
+            `https://api.github.com/repos/${owner}/${name}/hooks/${webhook.github_webhook_id}`,
+            {
+              headers: {
+                Authorization: `token ${decryptedToken}`,
+                Accept: "application/vnd.github.v3+json",
+              },
+            }
+          );
+        }
+      }
+    }
+
+    res.status(200).json({ message: "Webhook configured successfully" });
+  } catch (error) {
+    console.error(`${logPrefix} Error: ${error.message}`);
+    if (error.response) {
+      console.error(`${logPrefix} Response data: ${JSON.stringify(error.response.data)}`);
+      const errorData = error.response.data;
+      if (error.response.status === 403) {
+        return res.status(403).json({
+          error: "GitHub API access denied. Check token permissions (repo, admin:repo_hook).",
+          details: errorData,
+        });
+      } else if (error.response.status === 422) {
+        await Webhook.findOneAndUpdate(
+          { repo_id: req.body.repo_id },
+          { status: "Failed" },
+          { new: true }
+        ).then(() => console.log(`${logPrefix} Updated status to Failed for repo_id: ${req.body.repo_id}`));
+        return res.status(422).json({
+          error: "Validation failed. Ensure webhook URL is publicly accessible (not localhost).",
+          details: errorData,
+          suggestion: "Use a public URL (e.g., ngrok) for development.",
+        });
+      }
+    }
+
+    // Cập nhật status Failed cho mọi trường hợp lỗi khác
+    const existingWebhook = await Webhook.findOne({ repo_id: req.body.repo_id });
+    if (existingWebhook) {
+      await Webhook.findOneAndUpdate(
+        { repo_id: req.body.repo_id },
+        { status: "Failed" },
+        { new: true }
+      ).then(() => console.log(`${logPrefix} Updated status to Failed for repo_id: ${req.body.repo_id}`));
+    } else {
+      console.warn(`${logPrefix} No webhook found to update status for repo_id: ${req.body.repo_id}`);
+    }
+
+    return res.status(500).json({
+      error: "Internal server error while configuring webhook",
+      details: error.message,
+    });
+  }
+};
+
+// Cập nhật webhook (chỉ secret hoặc active)
+exports.updateWebhook = async (req, res, next) => {
+  const logPrefix = "[updateWebhook]";
+  try {
+    const { repo_id, webhook_secret, active } = req.body;
+
+    if (!repo_id) {
+      return res.status(400).json({ error: "Missing repo_id" });
+    }
+
+    const repo = await Repo.findById(repo_id);
+    if (!repo) {
+      return res.status(404).json({ error: "Repository not found" });
+    }
+
+    const webhook = await Webhook.findOne({ repo_id });
+    if (!webhook) {
+      return res.status(404).json({ error: "Webhook not found" });
+    }
+
+    const updates = {};
+    if (webhook_secret !== undefined) {
+      updates.webhook_secret = encryptWebhookSecret(webhook_secret);
+    }
+    if (active !== undefined) {
+      updates.active = active;
+      if (!active && webhook.github_webhook_id) {
+        const decryptedToken = repo.decryptToken();
+        const owner = repo.owner.login;
+        const name = repo.name;
+        await axios.delete(
+          `https://api.github.com/repos/${owner}/${name}/hooks/${webhook.github_webhook_id}`,
+          {
+            headers: {
+              Authorization: `token ${decryptedToken}`,
+              Accept: "application/vnd.github.v3+json",
+            },
+          }
+        );
+      }
+    }
+
+    if (Object.keys(updates).length > 0) {
+      await Webhook.findOneAndUpdate({ repo_id }, updates, { new: true });
+    }
+
+    res.status(200).json({ message: "Webhook updated successfully" });
+  } catch (error) {
+    console.error(`${logPrefix} Error: ${error.message}`);
+    if (error.response) {
+      console.error(`${logPrefix} Response data: ${JSON.stringify(error.response.data)}`);
+    }
+    next(error);
+  }
+};
+
+// Xóa webhook
+exports.deleteWebhook = async (req, res, next) => {
+  const logPrefix = "[deleteWebhook]";
+  try {
+    const { repo_id } = req.body;
+
+    if (!repo_id) {
+      return res.status(400).json({ error: "Missing repo_id" });
+    }
+
+    const repo = await Repo.findById(repo_id);
+    if (!repo) {
+      return res.status(404).json({ error: "Repository not found" });
+    }
+
+    const webhook = await Webhook.findOne({ repo_id });
+    if (!webhook) {
+      return res.status(404).json({ error: "Webhook not found" });
+    }
+
+    if (webhook.github_webhook_id) {
+      const decryptedToken = repo.decryptToken();
+      const owner = repo.owner.login;
+      const name = repo.name;
+      await axios.delete(
+        `https://api.github.com/repos/${owner}/${name}/hooks/${webhook.github_webhook_id}`,
+        {
+          headers: {
+            Authorization: `token ${decryptedToken}`,
+            Accept: "application/vnd.github.v3+json",
+          },
+        }
+      );
+    }
+
+    await Webhook.findOneAndDelete({ repo_id });
+
+    res.status(200).json({ message: "Webhook deleted successfully" });
+  } catch (error) {
+    console.error(`${logPrefix} Error: ${error.message}`);
+    if (error.response) {
+      console.error(`${logPrefix} Response data: ${JSON.stringify(error.response.data)}`);
+    }
     next(error);
   }
 };
