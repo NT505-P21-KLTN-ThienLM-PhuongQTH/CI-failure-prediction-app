@@ -32,11 +32,11 @@ const syncWorkflowsAndRuns = async (user_id, repo, logPrefix) => {
 
       console.log(`${logPrefix} Saving workflow: ${workflow.github_id}`);
       const updatedWorkflow = await Workflow.findOneAndUpdate(
-        { user_id: new mongoose.Types.ObjectId(String(user_id)), repo_id: repo._id, github_workflow_id: workflow.github_id },
+        { user_id: new mongoose.Types.ObjectId(String(user_id)), repo_id: repo.repo_id, github_workflow_id: workflow.github_id },
         {
           user_id: new mongoose.Types.ObjectId(String(user_id)),
           github_workflow_id: workflow.github_id,
-          repo_id: repo._id,
+          repo_id: repo.repo_id,
           name: workflow.name,
           path: workflow.path,
           state: workflow.state,
@@ -85,7 +85,7 @@ const syncWorkflowsAndRuns = async (user_id, repo, logPrefix) => {
             github_run_id: run.github_id,
             github_workflow_id: run.workflow_id,
             workflow_id: workflowMongoId,
-            repo_id: repo._id,
+            repo_id: repo.repo_id,
             name: run.name,
             head_branch: run.head_branch,
             head_sha: run.head_sha,

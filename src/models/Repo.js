@@ -1,42 +1,14 @@
+// models/Repo.js
 const mongoose = require('mongoose');
 const crypto = require('crypto');
 
 const RepoSchema = new mongoose.Schema({
   user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }, // Tham chiếu đến User
-  github_repo_id: { type: Number, required: true }, // ID từ GitHub
   full_name: { type: String, required: true },
-  owner: {
-    type: {
-      id: { type: Number, required: true },
-      login: { type: String, required: true },
-      avatar_url: { type: String, required: false },
-      _id: false,
-    },
-    required: true,
-  },
   name: { type: String, required: true },
-  token: { type: String, required: true }, // Token mã hóa
-  status: { type: String, enum: ['Pending', 'Success', 'Failed'], default: 'Pending' },
-  created_at: { type: Date, default: Date.now },
-  updated_at: { type: Date, default: Date.now },
-  private: { type: Boolean },
   html_url: { type: String },
-  homepage: { type: String },
-  pushed_at: { type: Date },
-  default_branch: { type: String },
-  language: { type: String },
-  stargazers_count: { type: Number },
-  forks_count: { type: Number },
-  watchers_count: { type: Number },
-  open_issues_count: { type: Number },
-  permissions: {
-    type: {
-      admin: { type: Boolean, required: true },
-      push: { type: Boolean, required: true },
-      pull: { type: Boolean, required: true },
-      _id: false,
-    },
-  },
+  status: { type: String, enum: ['Pending', 'Success', 'Failed'], default: 'Pending' },
+  token: { type: String, required: true }, // Token mã hóa
 }, { timestamps: true });
 
 // Mã hóa token trước khi lưu

@@ -5,7 +5,7 @@ const restrictToRepoOwner = () => {
     const logPrefix = "[restrictToRepoOwner]";
     try {
       const userId = req.user.id; // Lấy userId từ token (đã được gán bởi authenticateToken)
-      const repoId = req.params.id; // Lấy repoId từ params (VD: /repos/:id)
+      const repoId = req.params.id; // Lấy repoId từ params (VD: /repodata/:id)
 
       // Tìm repo dựa trên repoId
       const repo = await Repo.findById(repoId);

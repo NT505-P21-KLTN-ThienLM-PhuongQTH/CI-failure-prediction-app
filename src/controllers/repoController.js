@@ -1,147 +1,9 @@
-const axios = require('axios');
 const Repo = require('../models/Repo');
+const RepoData = require('../models/RepoData');
 const Workflow = require('../models/Workflow');
 const WorkflowRun = require('../models/WorkflowRun');
-const syncWorkflowsAndRuns = require('../utils/syncWorkflowsAndRuns');
-const crypto = require('crypto');
-const { retrieveQueue, syncQueue } = require('../utils/queue');
-
-// Hàm mã hóa token
-const encryptToken = (token) => {
-  const secret = process.env.ENCRYPTION_SECRET;
-  const key = crypto.createHash('sha256').update(secret).digest();
-  const iv = Buffer.alloc(16, 0);
-
-  const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
-  let encrypted = cipher.update(token, 'utf8', 'hex');
-  encrypted += cipher.final('hex');
-  return encrypted;
-};
-
-// Hàm trích xuất owner và repo từ URL
-const extractOwnerRepo = (url) => {
-  const match = url.match(/github\.com\/([^\/]+)\/([^\/]+)/);
-  if (!match) throw new Error('Invalid GitHub URL');
-  return { owner: match[1], repo: match[2] };
-};
-
-const processRepoUpdate = async (job) => {
-  const { repoId, url, token, owner, repo, logPrefix } = job.data;
-  try {
-    const repoCheck = await Repo.findOne({ _id: repoId });
-    if (!repoCheck || repoCheck.status !== 'Pending') {
-      console.log(`${logPrefix} Repository ${owner}/${repo} is no longer in Pending state. Skipping API call.`);
-      return;
-    }
-
-    console.log(`${logPrefix} Calling /retrieve for ${owner}/${repo}`);
-    const retrieveResponse = await axios.post(
-      'http://localhost:4567/retrieve',
-      { url, token },
-      { timeout: 600000, headers: { 'Content-Type': 'application/json' } }
-    );
-
-    console.log(`${logPrefix} /retrieve response:`, retrieveResponse.data);
-
-    if (retrieveResponse.status !== 200) {
-      throw new Error(`Failed to retrieve repository from GitHub: ${retrieveResponse.statusText}`);
-    }
-
-    const retrieveData = retrieveResponse.data;
-    if (retrieveData.status !== 'success') {
-      throw new Error(retrieveData.message || 'Retrieve API failed');
-    }
-
-    console.log(`${logPrefix} Calling /repos/${owner}/${repo}`);
-    const repoResponse = await axios.get(
-      `http://localhost:4567/repos/${owner}/${repo}`,
-      { timeout: 600000 }
-    );
-
-    console.log(`${logPrefix} /repos response:`, repoResponse.data);
-
-    if (repoResponse.status !== 200) {
-      throw new Error(`Failed to fetch repository details from ghtorrent: ${repoResponse.statusText}`);
-    }
-
-    const repoDetails = repoResponse.data;
-
-    if (!repoDetails.id) {
-      throw new Error('Repository ID not found in response');
-    }
-
-    const encryptedToken = encryptToken(token);
-
-    const updatedRepo = await Repo.findOneAndUpdate(
-      { _id: repoId },
-      {
-        github_repo_id: repoDetails.id,
-        full_name: repoDetails.full_name || `${owner}/${repo}`,
-        owner: {
-          id: repoDetails.owner.id,
-          login: repoDetails.owner.login,
-          avatar_url: repoDetails.owner.avatar_url,
-        },
-        name: repoDetails.name,
-        token: encryptedToken,
-        status: 'Success',
-        private: repoDetails.private,
-        html_url: repoDetails.html_url || url,
-        homepage: repoDetails.homepage,
-        pushed_at: repoDetails.pushed_at ? new Date(repoDetails.pushed_at) : null,
-        default_branch: repoDetails.default_branch,
-        language: repoDetails.language,
-        stargazers_count: repoDetails.stargazers_count,
-        forks_count: repoDetails.forks_count,
-        watchers_count: repoDetails.watchers_count,
-        open_issues_count: repoDetails.open_issues_count,
-        permissions: {
-          admin: repoDetails.permissions ? repoDetails.permissions.admin : false,
-          push: repoDetails.permissions ? repoDetails.permissions.push : false,
-          pull: repoDetails.permissions ? repoDetails.permissions.pull : false,
-        },
-      },
-      { new: true }
-    );
-
-    console.log(`${logPrefix} Repository processed successfully: ${updatedRepo.full_name}`);
-
-    // Đẩy công việc đồng bộ workflows và runs vào syncQueue
-    await syncQueue.add({
-      user_id: repoCheck.user_id,
-      repo: updatedRepo,
-      logPrefix,
-    });
-  } catch (error) {
-    console.error(`${logPrefix} Error in retrieveQueue: ${error.message}`);
-    if (error.response) {
-      console.error(`${logPrefix} Response data: ${JSON.stringify(error.response.data)}`);
-      console.error(`${logPrefix} Response status: ${error.response.status}`);
-    }
-    if (error.request) {
-      console.error(`${logPrefix} No response received from server`);
-    }
-    console.error(`${logPrefix} Error stack: ${error.stack}`);
-
-    await Repo.findOneAndUpdate({ _id: repoId }, { status: 'Failed' }, { new: true });
-  }
-};
-
-// Worker xử lý retrieveQueue
-retrieveQueue.process(processRepoUpdate);
-
-// Worker xử lý syncQueue
-syncQueue.process(async (job) => {
-  const { user_id, repo, logPrefix } = job.data;
-  try {
-    console.log(`${logPrefix} Syncing workflows and runs for repository ${repo.full_name}`);
-    await syncWorkflowsAndRuns(user_id, repo, logPrefix);
-    console.log(`${logPrefix} Successfully synced workflows and runs for ${repo.full_name}`);
-  } catch (error) {
-    console.error(`${logPrefix} Error in syncQueue: ${error.message}`);
-    console.error(`${logPrefix} Error stack: ${error.stack}`);
-  }
-});
+const { retrieveQueue } = require('../utils/queue');
+const { extractOwnerRepo, checkRepoExists } = require('../utils/utils');
 
 exports.addRepo = async (req, res, next) => {
   const logPrefix = '[addRepo]';
@@ -156,6 +18,12 @@ exports.addRepo = async (req, res, next) => {
     const { owner, repo } = extractOwnerRepo(url);
     const full_name = `${owner}/${repo}`;
 
+    const checkGitHubRepo = await checkRepoExists(owner, repo, token);
+    if (!checkGitHubRepo) {
+      console.warn(`${logPrefix} Repository ${full_name} does not exist on GitHub`);
+      return res.status(404).json({ error: `Repository ${full_name} does not exist on GitHub` });
+    }
+
     const existingRepo = await Repo.findOne({ user_id, full_name, status: { $in: ['Pending', 'Success', 'Failed'] } });
     if (existingRepo) {
       console.log(`${logPrefix} Repository ${full_name} already exists with status ${existingRepo.status}`);
@@ -167,31 +35,11 @@ exports.addRepo = async (req, res, next) => {
 
     const pendingRepo = new Repo({
       user_id,
-      github_repo_id: Date.now(),
       full_name,
-      owner: {
-        id: 0,
-        login: owner,
-        avatar_url: '',
-      },
       name: repo,
-      token,
-      status: 'Pending',
-      private: false,
       html_url: url,
-      homepage: '',
-      pushed_at: null,
-      default_branch: '',
-      language: '',
-      stargazers_count: 0,
-      forks_count: 0,
-      watchers_count: 0,
-      open_issues_count: 0,
-      permissions: {
-        admin: false,
-        push: false,
-        pull: false,
-      },
+      status: 'Pending',
+      token, // Lưu token vào Repo
     });
 
     await pendingRepo.save();
@@ -253,9 +101,15 @@ exports.updateRepo = async (req, res, next) => {
 
     const { owner, repo } = extractOwnerRepo(url);
 
+    const checkGitHubRepo = await checkRepoExists(owner, repo, token);
+    if (!checkGitHubRepo) {
+      console.warn(`${logPrefix} Repository ${full_name} does not exist on GitHub`);
+      return res.status(404).json({ error: `Repository ${full_name} does not exist on GitHub` });
+    }
+
     const pendingRepo = await Repo.findOneAndUpdate(
       { _id: repoId, },
-      { status: 'Pending' },
+      { status: 'Pending', token },
       { new: true }
     );
 
@@ -300,6 +154,9 @@ exports.deleteRepo = async (req, res, next) => {
     }
 
     console.log(`${logPrefix} Repository deleted successfully: ${deletedRepo.full_name}`);
+
+    await RepoData.deleteOne({ repo_id: repoId });
+    console.log(`${logPrefix} Deleted repo data for repository ${repoId}`);
 
     const deletedWorkflows = await Workflow.deleteMany({ repo_id: repoId });
     console.log(`${logPrefix} Deleted ${deletedWorkflows.deletedCount} workflows for repository ${repoId}`);
