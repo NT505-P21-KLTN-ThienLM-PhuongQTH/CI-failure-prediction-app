@@ -37,11 +37,6 @@ const RepoSchema = new mongoose.Schema({
       _id: false,
     },
   },
-  webhook: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "Webhook",
-    required: false,
-  },
 }, { timestamps: true });
 
 // Mã hóa token trước khi lưu
@@ -70,8 +65,5 @@ RepoSchema.methods.decryptToken = function() {
   decrypted += decipher.final('utf8');
   return decrypted;
 };
-
-// Tạo index cho user_id và github_repo_id để truy vấn nhanh hơn
-// RepoSchema.index({ user_id: 1, github_repo_id: 1 });
 
 module.exports = mongoose.model('Repo', RepoSchema);

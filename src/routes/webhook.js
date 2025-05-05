@@ -14,8 +14,7 @@ const parseGitHubPayload = (req, res, next) => {
   next();
 };
 
-router.post(
-  "/",
+router.post( "/",
   express.json(),
   parseGitHubPayload,
   webhookController.verifyWebhook,

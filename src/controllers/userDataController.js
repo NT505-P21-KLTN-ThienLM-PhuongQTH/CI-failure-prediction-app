@@ -67,6 +67,19 @@ exports.getUserData = async (req, res, next) => {
   }
 };
 
+// API mới: Lấy toàn bộ thông tin người dùng (chỉ dành cho admin)
+exports.getAllUserData = async (req, res, next) => {
+  const logPrefix = "[getAllUserData]";
+  try {
+    const userData = await UserData.find().lean();
+    console.log(`${logPrefix} All user data retrieved by admin ${req.user.id}`);
+    res.status(200).json(userData);
+  } catch (error) {
+    console.error(`${logPrefix} Error: ${error.message}`);
+    next(error);
+  }
+};
+
 exports.updateUserData = async (req, res, next) => {
   const logPrefix = "[updateUserData]";
   try {
@@ -83,7 +96,6 @@ exports.updateUserData = async (req, res, next) => {
       return res.status(404).json({ error: "User data not found" });
     }
 
-    // Đồng bộ email với bảng User nếu có thay đổi
     if (updateData.email) {
       await User.findOneAndUpdate(
         { _id: user_id },
@@ -100,6 +112,24 @@ exports.updateUserData = async (req, res, next) => {
   }
 };
 
+exports.deleteUserData = async (req, res, next) => {
+  const logPrefix = "[deleteUserData]";
+  try {
+    const { user_id } = req.params;
+    const userData = await UserData.findOneAndDelete({ user_id });
+
+    if (!userData) {
+      return res.status(404).json({ error: "User data not found" });
+    }
+
+    console.log(`${logPrefix} User data deleted successfully for user ${user_id}`);
+    res.status(200).json({ message: "User data deleted successfully" });
+  } catch (error) {
+    console.error(`${logPrefix} Error: ${error.message}`);
+    next(error);
+  }
+};
+
 exports.uploadAvatar = [
   upload.single("avatar"),
   async (req, res, next) => {
@@ -109,7 +139,7 @@ exports.uploadAvatar = [
       const file = req.file;
 
       if (!file) {
-        return res.status(400).json({ error: "No file uploaded"});
+        return res.status(400).json({ error: "No file uploaded" });
       }
 
       const params = {
@@ -119,11 +149,9 @@ exports.uploadAvatar = [
         ContentType: file.mimetype,
       };
 
-      // Sử dụng PutObjectCommand thay vì upload() như ở v2
       const command = new PutObjectCommand(params);
-      const data = await s3.send(command);
+      await s3.send(command);
 
-      // Trong v3, không có data.Location trực tiếp, cần tự xây dựng URL
       const avatarUrl = `https://${process.env.S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${params.Key}`;
 
       const userData = await UserData.findOneAndUpdate(

@@ -45,7 +45,7 @@ const register = async (req, res) => {
 
         console.log(`${logPrefix} User and UserData created successfully for ${email}`);
         res.status(201).json({
-            user: { id: user._id, name: user.name, role: user.role },
+            user: { id: user._id, name: user.name, email: user.email, role: user.role },
             message: "User registered successfully"
         });
     } catch (error) {
@@ -68,7 +68,7 @@ const login = async (req, res) => {
 
         console.log(`${logPrefix} Login successful for ${email}`);
         res.status(200).json({
-            user: { id: user._id, name: user.name, role: user.role },
+            user: { id: user._id, name: user.name, email: user.email, role: user.role },
             token,
             message: "Login successful"
         });
