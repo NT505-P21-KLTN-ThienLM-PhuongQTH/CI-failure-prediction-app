@@ -9,9 +9,8 @@ const userRoutes = require('./user');
 const userDataRoutes = require('./userData');
 const repoDataRoutes = require('./repoData');
 
-router.use(authenticateToken); // Apply authentication middleware to all routes
-
 router.use('/auth', authRoutes);
+router.use(authenticateToken);
 router.use('/repos', repoRoutes);
 router.use('/repodata', repoDataRoutes);
 router.use('/', workflowRoutes);

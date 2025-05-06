@@ -2,8 +2,11 @@ const axios = require('axios');
 const mongoose = require('mongoose');
 const Workflow = require('../models/Workflow');
 const WorkflowRun = require('../models/WorkflowRun');
+const Commit = require('../models/Commit');
 
 const syncWorkflowsAndRuns = async (user_id, repo, logPrefix) => {
+  let owner = 'unknown';
+  let repoName = 'unknown';
   try {
     const owner = repo.owner.login;
     const repoName = repo.name;
@@ -77,7 +80,7 @@ const syncWorkflowsAndRuns = async (user_id, repo, logPrefix) => {
       }
 
       console.log(`${logPrefix} Saving workflow run: ${run.github_id}`);
-      await WorkflowRun.findOneAndUpdate(
+      const updatedRun = await WorkflowRun.findOneAndUpdate(
         { user_id: new mongoose.Types.ObjectId(String(user_id)), github_run_id: run.github_id },
         {
           $set: {
@@ -114,11 +117,37 @@ const syncWorkflowsAndRuns = async (user_id, repo, logPrefix) => {
         },
         { upsert: true, new: true }
       );
+
+      if (run.commit) {
+        console.log(`${logPrefix} Saving commit for workflow run: ${run.github_id}`);
+        await Commit.findOneAndUpdate(
+          { workflow_run_id: updatedRun._id, sha: run.commit.sha },
+          {
+            workflow_run_id: updatedRun._id,
+            sha: run.commit.sha,
+            commit: {
+              author: {
+                name: run.commit.commit.author.name,
+                email: run.commit.commit.author.email,
+                date: new Date(run.commit.commit.author.date),
+              },
+              message: run.commit.commit.message,
+            },
+            html_url: run.commit.html_url,
+            stats: {
+              total: run.commit.stats.total,
+              additions: run.commit.stats.additions,
+              deletions: run.commit.stats.deletions,
+            },
+          },
+          { upsert: true, new: true }
+        );
+      }
     }
 
-    console.log(`${logPrefix} Workflows and runs synced successfully for ${owner}/${repoName}`);
+    console.log(`${logPrefix} Workflows, runs, and commits synced successfully for ${owner}/${repoName}`);
   } catch (error) {
-    console.error(`${logPrefix} Error syncing workflows and runs for ${owner}/${repoName}: ${error.message}`);
+    console.error(`${logPrefix} Error syncing workflows, runs, and commits for ${owner}/${repoName}: ${error.message}`);
     throw error;
   }
 };
