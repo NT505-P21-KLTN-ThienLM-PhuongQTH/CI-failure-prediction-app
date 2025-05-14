@@ -256,3 +256,73 @@ exports.getPipelineStats = async (req, res, next) => {
         next(error);
     }
 };
+
+exports.getWorkflowRuns = async (req, res, next) => {
+    try {
+        const { workflow_id, branch } = req.query;
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 7;
+        const skip = (page - 1) * limit;
+
+        if (!workflow_id || !branch) {
+        return res.status(400).json({ error: 'Missing workflow_id or branch' });
+        }
+
+        const workflowIdObject = new mongoose.Types.ObjectId(workflow_id);
+        const workflowRuns = await WorkflowRun.find({
+        workflow_id: workflowIdObject,
+        head_branch: branch,
+        })
+        .sort({ created_at: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean();
+
+        const totalRuns = await WorkflowRun.countDocuments({
+        workflow_id: workflowIdObject,
+        head_branch: branch,
+        });
+
+        res.status(200).json({
+        runs: workflowRuns.map(run => ({
+            id: run._id.toString(),
+            html_url: run.html_url,
+            head_sha: run.head_sha,
+            event: run.event,
+            run_started_at: run.run_started_at,
+            updated_at: run.updated_at,
+            actor: run.actor,
+            conclusion: run.conclusion,
+            status: run.status,
+        })),
+        total: totalRuns,
+        page,
+        limit,
+        });
+    } catch (error) {
+        console.error('Error in getWorkflowRuns:', error);
+        next(error);
+    }
+};
+
+exports.getWorkflowRunDetails = async (req, res, next) => {
+    try {
+        const runId = req.params.id;
+
+        if (!runId) {
+        return res.status(400).json({ error: 'Missing run_id' });
+        }
+
+        const runIdObject = new mongoose.Types.ObjectId(runId);
+        const run = await WorkflowRun.findOne({ _id: runIdObject }).lean();
+
+        if (!run) {
+        return res.status(404).json({ error: 'Workflow run not found' });
+        }
+
+        res.status(200).json(run);
+    } catch (error) {
+        console.error('Error in getWorkflowRunDetails:', error);
+        next(error);
+    }
+};

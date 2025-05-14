@@ -4,7 +4,6 @@ require('dotenv').config();
 const { connectDB } = require('./src/config');
 const routes = require('./src/routes');
 const errorHandler = require('./src/middlewares/error');
-// const { retrieveQueue, syncQueue } = require('./src/utils/queue');
 
 const app = express();
 
