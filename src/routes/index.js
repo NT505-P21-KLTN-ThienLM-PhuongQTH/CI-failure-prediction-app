@@ -11,6 +11,7 @@ const workflowRunRoutes = require('./workflowRun');
 const webhookRoutes = require('./webhook');
 
 router.use('/auth', authRoutes);
+router.use('/webhooks', webhookRoutes);
 router.use(authenticateToken);
 router.use('/user', userRoutes);
 router.use('/userdata', userDataRoutes);
@@ -18,6 +19,5 @@ router.use('/repos', repoRoutes);
 router.use('/repodata', repoDataRoutes);
 router.use('/workflow', workflowRoutes);
 router.use('/workflow_run', workflowRunRoutes);
-router.use('/webhooks', webhookRoutes);
 
 module.exports = router;

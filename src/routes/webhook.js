@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const webhookController = require('../controllers/webhookController');
+const { authenticateToken } = require('../middlewares/auth');
 
 // Middleware để xử lý Content-Type không chính xác
 const parseGitHubPayload = (req, res, next) => {
@@ -20,6 +21,7 @@ router.post( "/",
   webhookController.verifyWebhook,
   webhookController.handleWebhook
 );
+router.use(authenticateToken);
 router.post("/configure", webhookController.configureWebhook);
 router.post("/update", webhookController.updateWebhook);
 router.post("/delete", webhookController.deleteWebhook);
