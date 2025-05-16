@@ -124,6 +124,13 @@ exports.handleWebhook = async (req, res) => {
     const payload = req.body;
     console.log(`${logPrefix} Received webhook payload:`, payload);
 
+    // Kiểm tra action trong payload
+    const action = payload.action;
+    if (action !== "completed") {
+      console.log(`${logPrefix} Action "${action}" not processed (only "completed" is processed)`);
+      return res.status(200).json({ message: `Action "${action}" not processed`, details: "Only 'completed' action is processed" });
+    }
+
     const repo = req.repo;
     const repoData = req.repoData;
 

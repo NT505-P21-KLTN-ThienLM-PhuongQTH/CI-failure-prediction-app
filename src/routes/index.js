@@ -9,6 +9,7 @@ const repoDataRoutes = require('./repoData');
 const workflowRoutes = require('./workflow');
 const workflowRunRoutes = require('./workflowRun');
 const webhookRoutes = require('./webhook');
+const commitRoutes = require('./commit');
 
 router.use('/auth', authRoutes);
 router.use('/webhooks', webhookRoutes);
@@ -19,5 +20,6 @@ router.use('/repos', repoRoutes);
 router.use('/repodata', repoDataRoutes);
 router.use('/workflow', workflowRoutes);
 router.use('/workflow_run', workflowRunRoutes);
+router.use('/commits', commitRoutes);
 
 module.exports = router;

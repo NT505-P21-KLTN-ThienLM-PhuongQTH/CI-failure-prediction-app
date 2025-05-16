@@ -121,8 +121,9 @@ const syncWorkflowsAndRuns = async (user_id, repo, logPrefix) => {
       if (run.commit) {
         console.log(`${logPrefix} Saving commit for workflow run: ${run.github_id}`);
         await Commit.findOneAndUpdate(
-          { workflow_run_id: updatedRun._id, sha: run.commit.sha },
+          { user_id: new mongoose.Types.ObjectId(String(user_id)), workflow_run_id: updatedRun._id, sha: run.commit.sha },
           {
+            user_id: new mongoose.Types.ObjectId(String(user_id)),
             workflow_run_id: updatedRun._id,
             sha: run.commit.sha,
             commit: {
@@ -132,6 +133,11 @@ const syncWorkflowsAndRuns = async (user_id, repo, logPrefix) => {
                 date: new Date(run.commit.commit.author.date),
               },
               message: run.commit.commit.message,
+            },
+            author: {
+              login: run.commit.author.login,
+              avatar_url: run.commit.author.avatar_url || null,
+              html_url: run.commit.author.html_url || null,
             },
             html_url: run.commit.html_url,
             stats: {
