@@ -1,4 +1,3 @@
-// models/RepoData.js
 const mongoose = require('mongoose');
 
 const RepoDataSchema = new mongoose.Schema({
