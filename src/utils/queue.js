@@ -17,7 +17,7 @@ const processRepoUpdate = async (job) => {
 
     console.log(`${logPrefix} Calling /retrieve for ${owner}/${repo}`);
     const retrieveResponse = await axios.post(
-      'http://localhost:4567/retrieve',
+      `${process.env.GHTORRENT_API_URL}/retrieve`,
       { url, token },
       { timeout: 600000, headers: { 'Content-Type': 'application/json' } }
     );
@@ -35,7 +35,7 @@ const processRepoUpdate = async (job) => {
 
     console.log(`${logPrefix} Calling /repos/${owner}/${repo}`);
     const repoResponse = await axios.get(
-      `http://localhost:4567/repos/${owner}/${repo}`,
+      `${process.env.GHTORRENT_API_URL}/repos/${owner}/${repo}`,
       { timeout: 600000 }
     );
 

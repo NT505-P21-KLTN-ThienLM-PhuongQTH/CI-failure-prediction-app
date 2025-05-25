@@ -3,18 +3,25 @@ const mongoose = require('mongoose');
 const Workflow = require('../models/Workflow');
 const WorkflowRun = require('../models/WorkflowRun');
 const Commit = require('../models/Commit');
+const Prediction = require('../models/Prediction');
 
 const syncWorkflowsAndRuns = async (user_id, repo, logPrefix) => {
   let owner = 'unknown';
   let repoName = 'unknown';
   try {
-    const owner = repo.owner.login;
-    const repoName = repo.name;
+    if (!process.env.GHTORRENT_API_URL) {
+      throw new Error('GHTORRENT_API_URL environment variable is not set');
+    }
+    console.log(`Using GHTORRENT_API_URL: ${process.env.GHTORRENT_API_URL}`);
+
+    owner = repo.owner.login;
+    repoName = repo.name;
 
     console.log(`${logPrefix} Syncing workflows for owner: ${owner}, repo: ${repoName}`);
 
+    // Lấy danh sách workflows
     const workflowsResponse = await axios.get(
-      `http://localhost:4567/workflows?owner=${owner}&repo=${repoName}`,
+      `${process.env.GHTORRENT_API_URL}/workflows?owner=${owner}&repo=${repoName}`,
       { timeout: 600000 }
     );
 
@@ -49,14 +56,14 @@ const syncWorkflowsAndRuns = async (user_id, repo, logPrefix) => {
         },
         { upsert: true, new: true }
       );
-      // Lưu key dưới dạng số để đồng nhất với run.workflow_id
       workflowIdMap.set(Number(workflow.github_id), updatedWorkflow._id);
     }
 
     console.log(`${logPrefix} Syncing workflow runs for owner: ${owner}, repo: ${repoName}`);
 
+    // Lấy danh sách workflow runs
     const runsResponse = await axios.get(
-      `http://localhost:4567/workflow_runs?owner=${owner}&repo=${repoName}`,
+      `${process.env.GHTORRENT_API_URL}/workflow_runs?owner=${owner}&repo=${repoName}`,
       { timeout: 600000 }
     );
 
@@ -112,12 +119,34 @@ const syncWorkflowsAndRuns = async (user_id, repo, logPrefix) => {
               login: run.triggering_actor.login,
               avatar_url: run.triggering_actor.avatar_url || null,
               html_url: run.triggering_actor.html_url || null,
-            }
+            },
           },
         },
         { upsert: true, new: true }
       );
 
+      // Cập nhật actual_result cho Prediction
+      if (run.conclusion) {
+        console.log(`${logPrefix} Updating prediction actual_result for github_run_id: ${run.github_id}`);
+        const actual_result = run.conclusion !== 'success';
+        const prediction = await Prediction.findOneAndUpdate(
+            { github_run_id: run.github_id },
+            {
+              $set: {
+                actual_result,
+              },
+            },
+            { new: true }
+          );
+
+          if (prediction) {
+            console.log(`${logPrefix} Prediction actual_result updated for github_run_id=${run.github_id} in ${owner}/${repoName}: ${actual_result}`);
+          } else {
+            console.warn(`${logPrefix} No prediction found for github_run_id=${run.github_id} in ${owner}/${repoName}, workflow_id=${run.workflow_id}`);
+          }
+      }
+
+      // Lưu commit nếu có
       if (run.commit) {
         console.log(`${logPrefix} Saving commit for workflow run: ${run.github_id}`);
         await Commit.findOneAndUpdate(
@@ -151,9 +180,9 @@ const syncWorkflowsAndRuns = async (user_id, repo, logPrefix) => {
       }
     }
 
-    console.log(`${logPrefix} Workflows, runs, and commits synced successfully for ${owner}/${repoName}`);
+    console.log(`${logPrefix} Workflows, runs, commits, and predictions synced successfully for ${owner}/${repoName}`);
   } catch (error) {
-    console.error(`${logPrefix} Error syncing workflows, runs, and commits for ${owner}/${repoName}: ${error.message}`);
+    console.error(`${logPrefix} Error syncing workflows, runs, commits, and predictions for ${owner}/${repoName}: ${error.message}`);
     throw error;
   }
 };

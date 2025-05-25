@@ -11,9 +11,12 @@ const workflowRunRoutes = require('./workflowRun');
 const webhookRoutes = require('./webhook');
 const commitRoutes = require('./commit');
 const mlModelRoutes = require('./mlModel');
+const predictionRoutes = require('./prediction');
 
 router.use('/auth', authRoutes);
 router.use('/webhooks', webhookRoutes);
+router.use('/ml_model', mlModelRoutes);
+router.use('/prediction', predictionRoutes);
 router.use(authenticateToken);
 router.use('/user', userRoutes);
 router.use('/userdata', userDataRoutes);
@@ -21,7 +24,6 @@ router.use('/repos', repoRoutes);
 router.use('/repodata', repoDataRoutes);
 router.use('/workflow', workflowRoutes);
 router.use('/workflow_run', workflowRunRoutes);
-router.use('/ml_model', mlModelRoutes);
 router.use('/commits', commitRoutes);
 
 module.exports = router;

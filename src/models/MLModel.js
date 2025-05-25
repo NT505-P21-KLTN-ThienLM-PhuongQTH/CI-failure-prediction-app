@@ -19,6 +19,7 @@ const MLModelSchema = new mongoose.Schema({
             _id: false,
         },
     ],
+    is_current: { type: Boolean, default: false, index: true },
 }, { timestamps: true });
 
 module.exports = mongoose.model('MLModel', MLModelSchema, 'ml_models');
