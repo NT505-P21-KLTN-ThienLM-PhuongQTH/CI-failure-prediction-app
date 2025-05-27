@@ -43,6 +43,14 @@ const PredictionSchema = new mongoose.Schema({
         required: true,
         unique: true,
     },
+    project_name: {
+        type: String,
+        required: true,
+    },
+    branch: {
+        type: String,
+        required: true,
+    },
 }, { timestamps: true });
 
 module.exports = mongoose.model('Prediction', PredictionSchema);

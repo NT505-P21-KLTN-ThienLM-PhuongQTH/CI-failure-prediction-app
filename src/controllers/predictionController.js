@@ -13,6 +13,8 @@ exports.savePrediction = async (req, res, next) => {
             timestamp,
             execution_time,
             github_run_id,
+            project_name,
+            branch,
         } = req.body;
 
         // Kiểm tra các trường bắt buộc
@@ -24,12 +26,14 @@ exports.savePrediction = async (req, res, next) => {
             threshold === undefined ||
             !timestamp ||
             execution_time === undefined ||
-            !github_run_id
+            !github_run_id ||
+            !project_name ||
+            !branch
         ) {
             console.log(`${logPrefix} Missing required fields`);
             return res.status(400).json({
                 error: 'Missing required fields',
-                details: 'model_name, model_version, predicted_result, probability, threshold, timestamp, execution_time, github_run_id are required',
+                details: 'model_name, model_version, predicted_result, probability, threshold, timestamp, execution_time, github_run_id, project_name, branch are required',
             });
         }
 
@@ -84,6 +88,8 @@ exports.savePrediction = async (req, res, next) => {
                     execution_time,
                     github_run_id,
                     actual_result: null,
+                    project_name,
+                    branch,
                 },
             },
             { upsert: true, new: true, setDefaultsOnInsert: true }
@@ -104,6 +110,8 @@ exports.savePrediction = async (req, res, next) => {
                 execution_time: prediction.execution_time,
                 github_run_id: prediction.github_run_id,
                 actual_result: prediction.actual_result,
+                project_name: prediction.project_name,
+                branch: prediction.branch,
             },
         });
     } catch (error) {
@@ -179,6 +187,8 @@ exports.updateActualResult = async (req, res, next) => {
                 execution_time: prediction.execution_time,
                 github_run_id: prediction.github_run_id,
                 actual_result: prediction.actual_result,
+                project_name: prediction.project_name,
+                branch: prediction.branch,
             },
         });
     } catch (error) {
@@ -190,19 +200,23 @@ exports.updateActualResult = async (req, res, next) => {
 exports.getPredictions = async (req, res, next) => {
     const logPrefix = "[getPredictions]";
     try {
-        const { github_run_id, model_name } = req.query;
+        const { github_run_id, model_name, project_name, branch } = req.query;
         const query = {};
+
+        // Thêm các điều kiện vào query nếu tham số tồn tại
         if (github_run_id) query.github_run_id = github_run_id;
         if (model_name) query.model_name = model_name;
+        if (project_name) query.project_name = project_name;
+        if (branch) query.branch = branch;
 
         const predictions = await Prediction.find(query).sort({ timestamp: -1 }).lean();
 
         if (!predictions || predictions.length === 0) {
-            console.log(`${logPrefix} No predictions found`);
+            console.log(`${logPrefix} No predictions found for query: ${JSON.stringify(query)}`);
             return res.status(200).json([]);
         }
 
-        console.log(`${logPrefix} Found ${predictions.length} predictions`);
+        console.log(`${logPrefix} Found ${predictions.length} predictions for query: ${JSON.stringify(query)}`);
         const responsePredictions = predictions.map((prediction) => ({
             id: prediction._id,
             model_name: prediction.model_name,
@@ -214,11 +228,65 @@ exports.getPredictions = async (req, res, next) => {
             execution_time: prediction.execution_time,
             github_run_id: prediction.github_run_id,
             actual_result: prediction.actual_result,
+            project_name: prediction.project_name,
+            branch: prediction.branch,
         }));
 
         res.status(200).json(responsePredictions);
     } catch (error) {
         console.error(`${logPrefix} Error fetching predictions: ${error.message}`);
+        next(error);
+    }
+};
+
+exports.getBatchPredictions = async (req, res, next) => {
+    const logPrefix = "[getBatchPredictions]";
+    try {
+        const { github_run_ids, project_name, branch } = req.query;
+
+        // Kiểm tra các trường bắt buộc
+        if (!github_run_ids || !project_name || !branch) {
+            console.log(`${logPrefix} Missing github_run_ids, project_name, or branch`);
+            return res.status(400).json({
+                error: 'Missing required fields',
+                details: 'github_run_ids, project_name, and branch are required',
+            });
+        }
+
+        // Chuyển chuỗi thành mảng số
+        const runIds = github_run_ids.split(',').map(id => id.trim());
+
+        const predictions = await Prediction.find({
+            "github_run_id": { $in: runIds },
+            project_name,
+            branch,
+        }).lean();
+
+        if (!predictions || predictions.length === 0) {
+            console.log(`${logPrefix} No predictions found for batch query`);
+            return res.status(200).json({});
+        }
+
+        // Trả về đầy đủ thông tin prediction thay vì chỉ predicted_result
+        const predictionsMap = predictions.reduce((acc, pred) => {
+            acc[pred.github_run_id] = {
+                predicted_result: pred.predicted_result,
+                timestamp: pred.timestamp,
+                model_name: pred.model_name,
+                model_version: pred.model_version,
+                execution_time: pred.execution_time,
+                probability: pred.probability,
+                threshold: pred.threshold,
+                project_name: pred.project_name,
+                branch: pred.branch,
+            };
+            return acc;
+        }, {});
+
+        console.log(`${logPrefix} Found ${predictions.length} predictions for batch query`);
+        res.status(200).json(predictionsMap);
+    } catch (error) {
+        console.error(`${logPrefix} Error fetching batch predictions: ${error.message}`);
         next(error);
     }
 };
