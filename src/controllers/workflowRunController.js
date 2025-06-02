@@ -1,8 +1,8 @@
 const mongoose = require('mongoose');
 const Repo = require('../models/Repo');
 const WorkflowRun = require('../models/WorkflowRun');
+const Prediction = require('../models/Prediction');
 
-// API để lấy danh sách nhánh có workflow runs
 exports.getBranchesWithRuns = async (req, res, next) => {
     try {
         const user_id = req.query.user_id;
@@ -38,7 +38,7 @@ exports.getPipelineData = async (req, res, next) => {
         const branch = req.query.branch;
         const workflow_id = req.query.workflow_id;
         const timeUnit = req.query.timeUnit || 'day';
-        const recentDays = parseInt(req.query.recentDays) || 10; // Số ngày tối đa (ở đây là 10)
+        const recentDays = parseInt(req.query.recentDays) || 10;
 
         if (!user_id) {
             return res.status(400).json({ error: 'Missing user_id' });
@@ -64,43 +64,54 @@ exports.getPipelineData = async (req, res, next) => {
             query.workflow_id = workflowIdObject;
         }
 
-        // Lấy tất cả workflow runs theo điều kiện, sắp xếp theo created_at giảm dần (mới nhất trước)
+        // Lấy tất cả workflow runs
         const runs = await WorkflowRun.find(query)
-            .sort({ created_at: -1 }) // Sắp xếp giảm dần theo thời gian
+            .sort({ created_at: -1 })
             .lean();
 
         if (runs.length === 0) {
-            return res.status(200).json([]); // Trả về mảng rỗng nếu không có dữ liệu
+            return res.status(200).json([]);
         }
 
-        // Gom nhóm dữ liệu theo thời gian (theo ngày, tuần, hoặc tháng)
+        // Lấy tất cả predictions liên quan đến các workflow runs
+        const githubRunIds = runs.map(run => run.github_run_id);
+        const predictions = await Prediction.find({
+            github_run_id: { $in: githubRunIds }
+        }).lean();
+
+        // Gom nhóm dữ liệu theo thời gian
         const groupedData = {};
-        let uniqueDays = new Set(); // Lưu trữ các ngày duy nhất có build
+        let uniqueDays = new Set();
 
         runs.forEach((run) => {
             const date = new Date(run.created_at);
             let timeText;
 
             if (timeUnit === 'day') {
-                timeText = date.toISOString().split('T')[0]; // YYYY-MM-DD
+                timeText = date.toISOString().split('T')[0];
             } else if (timeUnit === 'week') {
                 const week = Math.ceil(date.getDate() / 7);
                 timeText = `Week ${week} ${date.getFullYear()}`;
-            } else {
+            } else if (timeUnit === 'month') {
                 timeText = `${date.toLocaleString('default', { month: 'short' })} ${date.getFullYear()}`;
+            } else if (timeUnit === 'quarter') {
+                const quarter = Math.ceil((date.getMonth() + 1) / 3);
+                timeText = `Q${quarter} ${date.getFullYear()}`;
+            } else if (timeUnit === 'year') {
+                timeText = `${date.getFullYear()}`;
             }
 
-            // Chỉ thêm vào groupedData nếu chưa đủ 10 ngày duy nhất
             if (timeUnit === 'day' && uniqueDays.size < recentDays) {
                 uniqueDays.add(timeText);
             } else if (timeUnit === 'day' && !uniqueDays.has(timeText)) {
-                return; // Bỏ qua nếu đã đủ 10 ngày duy nhất
+                return;
             }
 
             if (!groupedData[timeText]) {
                 groupedData[timeText] = {
                     success: 0,
                     failed: 0,
+                    predictedCorrect: 0,
                     date: date.toISOString(),
                 };
             }
@@ -110,6 +121,17 @@ exports.getPipelineData = async (req, res, next) => {
             } else if (run.conclusion === 'failure') {
                 groupedData[timeText].failed += 1;
             }
+
+            // Tìm prediction tương ứng với run này
+            const prediction = predictions.find(pred => pred.github_run_id === run.github_run_id);
+            if (prediction) {
+                const predictedResult = prediction.predicted_result; // true: failure, false: success
+                const actualResult = prediction.actual_result; // true: failure, false: success
+                const isCorrect = predictedResult === actualResult; // So sánh predicted_result với actual_result
+                if (isCorrect) {
+                    groupedData[timeText].predictedCorrect += 1;
+                }
+            }
         });
 
         // Chuyển dữ liệu thành mảng và sắp xếp theo ngày
@@ -117,10 +139,10 @@ exports.getPipelineData = async (req, res, next) => {
             timeText,
             success: groupedData[timeText].success,
             failed: groupedData[timeText].failed,
+            predictedCorrect: groupedData[timeText].predictedCorrect,
             date: groupedData[timeText].date,
         }));
 
-        // Sắp xếp lại theo ngày tăng dần (để hiển thị biểu đồ từ trái sang phải: cũ -> mới)
         pipelineData.sort((a, b) => new Date(a.date) - new Date(b.date));
 
         // Tính tỷ lệ phần trăm
@@ -133,8 +155,9 @@ exports.getPipelineData = async (req, res, next) => {
                 timeText: item.timeText,
                 success: item.success,
                 failed: item.failed,
-                successRate: parseFloat(successRate.toFixed(2)), // Tỷ lệ thành công
-                failedRate: parseFloat(failedRate.toFixed(2)), // Tỷ lệ thất bại
+                predictedCorrect: item.predictedCorrect,
+                successRate: parseFloat(successRate.toFixed(2)),
+                failedRate: parseFloat(failedRate.toFixed(2)),
                 date: item.date,
             };
         });
@@ -160,7 +183,6 @@ exports.getPipelineStats = async (req, res, next) => {
         const userIdObject = new mongoose.Types.ObjectId(String(user_id));
         const repoIdObject = new mongoose.Types.ObjectId(String(repo_id));
 
-        // Query cơ bản
         const query = {
             user_id: userIdObject,
             repo_id: repoIdObject,
@@ -172,17 +194,14 @@ exports.getPipelineStats = async (req, res, next) => {
             query.workflow_id = workflowIdObject;
         }
 
-        // 1. Lấy dữ liệu hiện tại (tất cả runs)
         const runs = await WorkflowRun.find(query).lean();
 
         const totalPipelines = runs.length;
         const successRuns = runs.filter(run => run.conclusion === 'success').length;
         const failedRuns = runs.filter(run => run.conclusion === 'failure').length;
 
-        // Tính success rate hiện tại
         const successRate = totalPipelines > 0 ? (successRuns / totalPipelines) * 100 : 0;
 
-        // Tính thời gian chạy trung bình (giả định run_duration tính bằng giây)
         const totalRunTime = runs.reduce((sum, run) => {
             const startTime = new Date(run.run_started_at).getTime();
             const endTime = new Date(run.updated_at).getTime();
@@ -191,7 +210,6 @@ exports.getPipelineStats = async (req, res, next) => {
         }, 0);
         const averageRunTime = totalPipelines > 0 ? totalRunTime / totalPipelines : 0;
 
-        // 2. Lấy dữ liệu từ 30 ngày trước để so sánh
         const thirtyDaysAgo = new Date();
         thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
@@ -206,14 +224,11 @@ exports.getPipelineStats = async (req, res, next) => {
         const previousSuccessRuns = previousRuns.filter(run => run.conclusion === 'success').length;
         const previousFailedRuns = previousRuns.filter(run => run.conclusion === 'failure').length;
 
-        // Tính success rate trước đó
         const previousSuccessRate = previousTotalRuns > 0 ? (previousSuccessRuns / previousTotalRuns) * 100 : 0;
 
-        // Tính sự thay đổi
         const successRateChange = successRate - previousSuccessRate;
         const failedBuildsChange = previousTotalRuns > 0 ? ((failedRuns - previousFailedRuns) / previousTotalRuns) * 100 : 0;
 
-        // 3. Tính last_failure (thời gian kể từ lần thất bại cuối cùng)
         const lastFailedRun = await WorkflowRun.findOne({
             ...query,
             conclusion: 'failure',
@@ -230,7 +245,6 @@ exports.getPipelineStats = async (req, res, next) => {
             lastFailure = diffDays;
         }
 
-        // 4. Tính recent_failures (số lượng build thất bại trong 7 ngày gần nhất)
         const sevenDaysAgo = new Date();
         sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
@@ -240,7 +254,6 @@ exports.getPipelineStats = async (req, res, next) => {
             updated_at: { $gte: sevenDaysAgo },
         });
 
-        // Trả về kết quả
         res.status(200).json({
             total_pipelines: totalPipelines,
             success_rate: parseFloat(successRate.toFixed(2)),
@@ -265,7 +278,6 @@ exports.getWorkflowRuns = async (req, res, next) => {
         let query = {};
 
         if (workflow_id && branch) {
-            // Validate workflow_id
             if (!mongoose.Types.ObjectId.isValid(workflow_id)) {
                 console.log(`${logPrefix} Invalid workflow_id: ${workflow_id}`);
                 return res.status(400).json({
@@ -274,7 +286,6 @@ exports.getWorkflowRuns = async (req, res, next) => {
                 });
             }
 
-            // Query theo workflow_id và branch, bỏ qua repo_id nếu có
             query = {
                 workflow_id: new mongoose.Types.ObjectId(workflow_id),
                 head_branch: branch,
@@ -288,7 +299,6 @@ exports.getWorkflowRuns = async (req, res, next) => {
                 });
             }
 
-            // Validate repo_id
             if (!mongoose.Types.ObjectId.isValid(repo_id)) {
                 console.log(`${logPrefix} Invalid repo_id: ${repo_id}`);
                 return res.status(400).json({
@@ -297,19 +307,16 @@ exports.getWorkflowRuns = async (req, res, next) => {
                 });
             }
 
-            // Query theo repo_id và branch
             query = {
                 repo_id: new mongoose.Types.ObjectId(repo_id),
                 head_branch: branch,
             };
         }
 
-        // Truy vấn WorkflowRun
         const workflowRuns = await WorkflowRun.find(query)
             .sort({ created_at: -1 })
             .lean();
 
-        // Nếu không tìm thấy runs
         if (!workflowRuns || workflowRuns.length === 0) {
             console.log(`${logPrefix} No workflow runs found for query: ${JSON.stringify(query)}`);
             return res.status(200).json({

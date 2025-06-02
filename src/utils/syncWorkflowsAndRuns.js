@@ -4,6 +4,7 @@ const Workflow = require('../models/Workflow');
 const WorkflowRun = require('../models/WorkflowRun');
 const Commit = require('../models/Commit');
 const Prediction = require('../models/Prediction');
+const Report = require('../models/Report');
 const { sendPredictionMismatchEmail } = require('../services/emailService');
 
 const syncWorkflowsAndRuns = async (user_id, repo, logPrefix) => {
@@ -140,6 +141,17 @@ const syncWorkflowsAndRuns = async (user_id, repo, logPrefix) => {
             const project_name = `${owner}/${repoName}`;
             const branch = run.head_branch;
 
+            // Tạo Report
+            console.log(`${logPrefix} Creating report for mismatch github_run_id=${run.github_id}`);
+            const report = await Report.create({
+              github_run_id: run.github_id,
+              prediction_id: prediction._id,
+              project_name,
+              branch,
+              reported_by: 'system',
+            });
+
+            // Gửi email
             await sendPredictionMismatchEmail({
               logPrefix,
               github_run_id: run.github_id,
@@ -150,7 +162,7 @@ const syncWorkflowsAndRuns = async (user_id, repo, logPrefix) => {
               reported_by: 'system',
             });
 
-            console.log(`${logPrefix} Mismatch detected and email sent for github_run_id=${run.github_id}`);
+            console.log(`${logPrefix} Mismatch detected, report created (reportId=${report._id}), and email sent for github_run_id=${run.github_id}`);
           } else {
             console.log(`${logPrefix} No mismatch for github_run_id=${run.github_id}`);
           }
@@ -192,9 +204,9 @@ const syncWorkflowsAndRuns = async (user_id, repo, logPrefix) => {
       }
     }
 
-    console.log(`${logPrefix} Workflows, runs, commits, and predictions synced successfully for ${owner}/${repoName}`);
+    console.log(`${logPrefix} Workflows, runs, commits, predictions, and reports synced successfully for ${owner}/${repoName}`);
   } catch (error) {
-    console.error(`${logPrefix} Error syncing workflows, runs, commits, and predictions for ${owner}/${repoName}: ${error.message}`);
+    console.error(`${logPrefix} Error syncing workflows, runs, commits, predictions, and reports for ${owner}/${repoName}: ${error.message}`);
     throw error;
   }
 };

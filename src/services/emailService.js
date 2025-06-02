@@ -25,7 +25,7 @@ const sendPredictionMismatchEmail = async ({ logPrefix, github_run_id, project_n
         <p><strong>Actual Result:</strong> ${actual_result ? 'Failure' : 'Success'}</p>
         <p><strong>Reported By:</strong> ${reported_by}</p>
         <p><a href="https://github.com/${project_name}/actions/runs/${github_run_id}">View Run Details</a></p>
-        <p><a href="${process.env.SERVER_API_URL}/report/${github_run_id}/action">Handle Retrain Request</a></p>
+        <p><a href="${process.env.FRONTEND_URL}/reports">View All Reports</a></p>
       `,
     };
 

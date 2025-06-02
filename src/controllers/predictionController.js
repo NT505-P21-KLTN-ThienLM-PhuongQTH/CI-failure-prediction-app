@@ -317,9 +317,77 @@ exports.getPredictionResultById = async (req, res, next) => {
         res.status(200).json({
             predicted_result: prediction.predicted_result,
             actual_result: prediction.actual_result,
+            execution_time: prediction.execution_time,
         });
     } catch (error) {
         console.error(`${logPrefix} Error: ${error.message}`);
+        next(error);
+    }
+};
+
+exports.getPredictionByRunId = async (req, res, next) => {
+    const logPrefix = "[getPredictionByRunId]";
+    try {
+        const { github_run_id } = req.params;
+        if (!github_run_id) {
+            console.log(`${logPrefix} Missing github_run_id param`);
+            return res.status(400).json({
+                error: 'Missing github_run_id param',
+                details: 'GitHub run ID is required in params',
+            });
+        }
+
+        const prediction = await Prediction.findOne({ github_run_id }).lean();
+        if (!prediction) {
+            console.log(`${logPrefix} Prediction not found for github_run_id=${github_run_id}`);
+            return res.status(404).json({
+                error: 'Prediction not found',
+                details: `No prediction found for github_run_id=${github_run_id}`,
+            });
+        }
+
+        res.status(200).json(prediction);
+    } catch (error) {
+        console.error(`${logPrefix} Error: ${error.message}`);
+        next(error);
+    }
+};
+
+exports.getLatestPrediction = async (req, res, next) => {
+    const logPrefix = "[getLatestPrediction]";
+    try {
+        const { project_name, branch } = req.query;
+
+        // Kiểm tra các trường bắt buộc
+        if (!project_name || !branch) {
+            console.log(`${logPrefix} Missing project_name or branch`);
+            return res.status(400).json({
+                error: 'Missing required fields',
+                details: 'project_name and branch are required',
+            });
+        }
+
+        const prediction = await Prediction.findOne({ project_name, branch })
+            .sort({ timestamp: -1 })
+            .lean();
+
+        if (!prediction) {
+            console.log(`${logPrefix} No predictions found for project_name=${project_name} and branch=${branch}`);
+            return res.status(200).json(null);
+        }
+
+        res.status(200).json({
+            predicted_result: prediction.predicted_result,
+            execution_time: prediction.execution_time,
+            actual_result: prediction.actual_result,
+            timestamp: prediction.timestamp,
+            model_name: prediction.model_name,
+            model_version: prediction.model_version,
+            project_name: prediction.project_name,
+            branch: prediction.branch,
+        });
+    } catch (error) {
+        console.error(`${logPrefix} Error fetching latest prediction: ${error.message}`);
         next(error);
     }
 };
