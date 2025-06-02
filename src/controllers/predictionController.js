@@ -1,5 +1,7 @@
 const Prediction = require('../models/Prediction');
 const MLModel = require('../models/MLModel');
+const WorkflowRun = require('../models/WorkflowRun');
+const Report = require("../models/Report")
 
 exports.savePrediction = async (req, res, next) => {
     const logPrefix = "[savePrediction]";
@@ -287,6 +289,37 @@ exports.getBatchPredictions = async (req, res, next) => {
         res.status(200).json(predictionsMap);
     } catch (error) {
         console.error(`${logPrefix} Error fetching batch predictions: ${error.message}`);
+        next(error);
+    }
+};
+
+exports.getPredictionResultById = async (req, res, next) => {
+    const logPrefix = "[getPredictionResultById]";
+    try {
+        const { id } = req.params;
+        if (!id) {
+            console.log(`${logPrefix} Missing id param`);
+            return res.status(400).json({
+                error: 'Missing id param',
+                details: 'Prediction id is required in params',
+            });
+        }
+
+        const prediction = await Prediction.findById(id).lean();
+        if (!prediction) {
+            console.log(`${logPrefix} Prediction not found for id=${id}`);
+            return res.status(404).json({
+                error: 'Prediction not found',
+                details: `No prediction found for id=${id}`,
+            });
+        }
+
+        res.status(200).json({
+            predicted_result: prediction.predicted_result,
+            actual_result: prediction.actual_result,
+        });
+    } catch (error) {
+        console.error(`${logPrefix} Error: ${error.message}`);
         next(error);
     }
 };

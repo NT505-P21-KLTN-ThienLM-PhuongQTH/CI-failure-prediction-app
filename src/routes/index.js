@@ -12,12 +12,14 @@ const webhookRoutes = require('./webhook');
 const commitRoutes = require('./commit');
 const mlModelRoutes = require('./mlModel');
 const predictionRoutes = require('./prediction');
+const reportRoutes = require('./report');
 
 router.use('/auth', authRoutes);
 router.use('/webhooks', webhookRoutes);
 router.use('/ml_model', mlModelRoutes);
 router.use('/prediction', predictionRoutes);
 router.use(authenticateToken);
+router.use('/report', reportRoutes)
 router.use('/user', userRoutes);
 router.use('/userdata', userDataRoutes);
 router.use('/repos', repoRoutes);

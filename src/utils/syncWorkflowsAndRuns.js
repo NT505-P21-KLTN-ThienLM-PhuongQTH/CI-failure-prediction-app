@@ -4,6 +4,7 @@ const Workflow = require('../models/Workflow');
 const WorkflowRun = require('../models/WorkflowRun');
 const Commit = require('../models/Commit');
 const Prediction = require('../models/Prediction');
+const { sendPredictionMismatchEmail } = require('../services/emailService');
 
 const syncWorkflowsAndRuns = async (user_id, repo, logPrefix) => {
   let owner = 'unknown';
@@ -19,7 +20,6 @@ const syncWorkflowsAndRuns = async (user_id, repo, logPrefix) => {
 
     console.log(`${logPrefix} Syncing workflows for owner: ${owner}, repo: ${repoName}`);
 
-    // Lấy danh sách workflows
     const workflowsResponse = await axios.get(
       `${process.env.GHTORRENT_API_URL}/workflows?owner=${owner}&repo=${repoName}`,
       { timeout: 600000 }
@@ -61,7 +61,6 @@ const syncWorkflowsAndRuns = async (user_id, repo, logPrefix) => {
 
     console.log(`${logPrefix} Syncing workflow runs for owner: ${owner}, repo: ${repoName}`);
 
-    // Lấy danh sách workflow runs
     const runsResponse = await axios.get(
       `${process.env.GHTORRENT_API_URL}/workflow_runs?owner=${owner}&repo=${repoName}`,
       { timeout: 600000 }
@@ -125,28 +124,41 @@ const syncWorkflowsAndRuns = async (user_id, repo, logPrefix) => {
         { upsert: true, new: true }
       );
 
-      // Cập nhật actual_result cho Prediction
       if (run.conclusion) {
         console.log(`${logPrefix} Updating prediction actual_result for github_run_id: ${run.github_id}`);
         const actual_result = run.conclusion !== 'success';
         const prediction = await Prediction.findOneAndUpdate(
-            { github_run_id: run.github_id },
-            {
-              $set: {
-                actual_result,
-              },
-            },
-            { new: true }
-          );
+          { github_run_id: run.github_id },
+          { $set: { actual_result } },
+          { new: true }
+        );
 
-          if (prediction) {
-            console.log(`${logPrefix} Prediction actual_result updated for github_run_id=${run.github_id} in ${owner}/${repoName}: ${actual_result}`);
+        if (prediction) {
+          console.log(`${logPrefix} Prediction actual_result updated for github_run_id=${run.github_id} in ${owner}/${repoName}: ${actual_result}`);
+
+          if (prediction.predicted_result !== actual_result) {
+            const project_name = `${owner}/${repoName}`;
+            const branch = run.head_branch;
+
+            await sendPredictionMismatchEmail({
+              logPrefix,
+              github_run_id: run.github_id,
+              project_name,
+              branch,
+              predicted_result: prediction.predicted_result,
+              actual_result,
+              reported_by: 'system',
+            });
+
+            console.log(`${logPrefix} Mismatch detected and email sent for github_run_id=${run.github_id}`);
           } else {
-            console.warn(`${logPrefix} No prediction found for github_run_id=${run.github_id} in ${owner}/${repoName}, workflow_id=${run.workflow_id}`);
+            console.log(`${logPrefix} No mismatch for github_run_id=${run.github_id}`);
           }
+        } else {
+          console.warn(`${logPrefix} No prediction found for github_run_id=${run.github_id} in ${owner}/${repoName}, workflow_id=${run.workflow_id}`);
+        }
       }
 
-      // Lưu commit nếu có
       if (run.commit) {
         console.log(`${logPrefix} Saving commit for workflow run: ${run.github_id}`);
         await Commit.findOneAndUpdate(

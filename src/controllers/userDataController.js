@@ -1,4 +1,3 @@
-// controllers/userDataController.js
 const User = require("../models/User");
 const UserData = require("../models/UserData");
 const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
