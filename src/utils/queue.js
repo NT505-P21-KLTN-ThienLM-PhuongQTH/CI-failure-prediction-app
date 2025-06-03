@@ -101,6 +101,8 @@ const processRepoUpdate = async (job) => {
             push: repoDetails.permissions ? repoDetails.permissions.push : false,
             pull: repoDetails.permissions ? repoDetails.permissions.pull : false,
           },
+          created_at: repoDetails.created_at ? new Date(repoDetails.created_at) : null,
+          updated_at: repoDetails.updated_at ? new Date(repoDetails.updated_at) : null,
         },
         { new: true }
       );
@@ -132,6 +134,8 @@ const processRepoUpdate = async (job) => {
           push: repoDetails.permissions ? repoDetails.permissions.push : false,
           pull: repoDetails.permissions ? repoDetails.permissions.pull : false,
         },
+        created_at: repoDetails.created_at ? new Date(repoDetails.created_at) : null,
+        updated_at: repoDetails.updated_at ? new Date(repoDetails.updated_at) : null,
       });
       await repoData.save();
       console.log(`${logPrefix} Created new RepoData for repo ${repoId}`);

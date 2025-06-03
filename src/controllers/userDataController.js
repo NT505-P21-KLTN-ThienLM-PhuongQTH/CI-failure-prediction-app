@@ -18,13 +18,11 @@ exports.createUserData = async (req, res, next) => {
   try {
     const { user_id, fullname, email, role, phone, pronouns, bio, github_account, address, avatar } = req.body;
 
-    // Kiểm tra user_id tồn tại trong bảng users
     const user = await User.findById(user_id);
     if (!user) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    // Tạo hoặc cập nhật UserData
     const userData = await UserData.findOneAndUpdate(
       { user_id },
       {
@@ -66,7 +64,6 @@ exports.getUserData = async (req, res, next) => {
   }
 };
 
-// API mới: Lấy toàn bộ thông tin người dùng (chỉ dành cho admin)
 exports.getAllUserData = async (req, res, next) => {
   const logPrefix = "[getAllUserData]";
   try {
@@ -85,25 +82,42 @@ exports.updateUserData = async (req, res, next) => {
     const { user_id } = req.params;
     const updateData = req.body;
 
-    const userData = await UserData.findOneAndUpdate(
-      { user_id },
-      { ...updateData, updatedAt: Date.now() },
-      { new: true, runValidators: true }
-    );
-
-    if (!userData) {
-      return res.status(404).json({ error: "User data not found" });
+    const user = await User.findById(user_id);
+    if (!user) {
+      console.log(`${logPrefix} User not found for user_id: ${user_id}`);
+      return res.status(404).json({ error: "User not found" });
     }
 
-    if (updateData.email) {
-      await User.findOneAndUpdate(
-        { _id: user_id },
-        { email: updateData.email },
+    let userData = await UserData.findOne({ user_id });
+
+    if (userData) {
+      userData = await UserData.findOneAndUpdate(
+        { user_id },
+        { ...updateData, updatedAt: Date.now() },
         { new: true, runValidators: true }
       );
+      console.log(`${logPrefix} UserData updated for user_id: ${user_id}`);
+    } else {
+      userData = await UserData.create({
+        user_id,
+        ...updateData,
+      });
+      console.log(`${logPrefix} UserData created for user_id: ${user_id}`);
     }
 
-    console.log(`${logPrefix} User data updated successfully for user ${user_id}`);
+    const userUpdate = {};
+    if (updateData.fullname) userUpdate.name = updateData.fullname;
+    if (updateData.email) userUpdate.email = updateData.email;
+
+    if (Object.keys(userUpdate).length > 0) {
+      await User.findByIdAndUpdate(
+        user_id,
+        { ...userUpdate, updatedAt: Date.now() },
+        { new: true, runValidators: true }
+      );
+      console.log(`${logPrefix} User updated with name/email for user_id: ${user_id}`);
+    }
+
     res.status(200).json(userData);
   } catch (error) {
     console.error(`${logPrefix} Error: ${error.message}`);
@@ -115,14 +129,24 @@ exports.deleteUserData = async (req, res, next) => {
   const logPrefix = "[deleteUserData]";
   try {
     const { user_id } = req.params;
+
+    // Delete user data
     const userData = await UserData.findOneAndDelete({ user_id });
 
     if (!userData) {
       return res.status(404).json({ error: "User data not found" });
     }
 
-    console.log(`${logPrefix} User data deleted successfully for user ${user_id}`);
-    res.status(200).json({ message: "User data deleted successfully" });
+    // Delete user model as well
+    const user = await User.findByIdAndDelete(user_id);
+
+    if (!user) {
+      console.log(`${logPrefix} User data deleted, but user not found for user_id: ${user_id}`);
+      return res.status(200).json({ message: "User data deleted, but user not found" });
+    }
+
+    console.log(`${logPrefix} User data and user deleted successfully for user ${user_id}`);
+    res.status(200).json({ message: "User data and user deleted successfully" });
   } catch (error) {
     console.error(`${logPrefix} Error: ${error.message}`);
     next(error);
