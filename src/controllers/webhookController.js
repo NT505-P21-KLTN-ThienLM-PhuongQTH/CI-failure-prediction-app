@@ -16,7 +16,7 @@ const encryptWebhookSecret = (secret) => {
   return encrypted;
 };
 
-// Hàm giải mã webhook_secret (dùng để hiển thị ẩn)
+// Hàm giải mã webhook_secret
 const decryptWebhookSecret = (encryptedSecret) => {
   const secretKey = process.env.ENCRYPTION_SECRET;
   const key = crypto.createHash("sha256").update(secretKey).digest();
@@ -38,14 +38,12 @@ exports.verifyWebhook = async (req, res, next) => {
   const payload = req.body;
   console.log(`${logPrefix} Payload received:`, payload);
 
-  // Lấy repository ID từ payload
   const repoId = payload.workflow_run?.head_repository?.id || payload.repository?.id;
   if (!repoId) {
     console.log(`${logPrefix} Missing repository ID in payload`);
     return res.status(400).json({ error: "Missing repository ID in payload" });
   }
 
-  // Tìm tất cả Repo có github_repo_id khớp
   const repoDatas = await RepoData.find({ github_repo_id: repoId });
   if (!repoDatas || repoDatas.length === 0) {
     console.log(`${logPrefix} Repository not found for github_repo_id=${repoId}`);
@@ -55,10 +53,7 @@ exports.verifyWebhook = async (req, res, next) => {
     });
   }
 
-  // Lấy danh sách repo_id từ RepoData
   const repoIds = repoDatas.map(repoData => repoData.repo_id);
-
-  // Tìm tất cả Repo tương ứng
   const repos = await Repo.find({ _id: { $in: repoIds } });
   if (!repos || repos.length === 0) {
     console.log(`${logPrefix} Repo not found for github_repo_id=${repoId}`);
@@ -68,7 +63,6 @@ exports.verifyWebhook = async (req, res, next) => {
     });
   }
 
-  // Tìm tất cả Webhook liên quan đến các Repo này
   const webhooks = await Webhook.find({ repo_id: { $in: repoIds } });
   if (!webhooks || webhooks.length === 0) {
     console.log(`${logPrefix} Webhook not configured for github_repo_id=${repoId}`);
@@ -78,7 +72,6 @@ exports.verifyWebhook = async (req, res, next) => {
     });
   }
 
-  // Kiểm tra chữ ký HMAC với từng Webhook để tìm webhook hợp lệ
   let matchedWebhook = null;
   let matchedRepo = null;
   let matchedRepoData = null;
@@ -124,7 +117,6 @@ exports.handleWebhook = async (req, res) => {
     const payload = req.body;
     console.log(`${logPrefix} Received webhook payload:`, payload);
 
-    // Kiểm tra action trong payload
     const action = payload.action;
     if (action !== "completed") {
       console.log(`${logPrefix} Action "${action}" not processed (only "completed" is processed)`);
@@ -141,7 +133,6 @@ exports.handleWebhook = async (req, res) => {
     const owner = repoData.owner.login;
     const repoName = repoData.name;
 
-    // Đặt trạng thái của repo thành Pending trước khi xử lý
     await Repo.findOneAndUpdate(
       { _id: repoId },
       { status: "Pending" },
@@ -149,20 +140,12 @@ exports.handleWebhook = async (req, res) => {
     );
     console.log(`${logPrefix} Repository ${repoData.full_name} set to Pending state for processing`);
 
-    // Đẩy công việc vào retrieveQueue
     await retrieveQueue.add({
       repoId: repoId,
       url,
       token,
       owner,
       repo: repoName,
-      logPrefix,
-    });
-
-    // Đẩy công việc đồng bộ vào syncQueue
-    await syncQueue.add({
-      user_id,
-      repoData,
       logPrefix,
     });
 
@@ -174,7 +157,6 @@ exports.handleWebhook = async (req, res) => {
       console.error(`${logPrefix} Response status: ${error.response.status}`);
     }
 
-    // Cập nhật trạng thái repo thành Failed nếu có lỗi
     if (req.repo) {
       await Repo.findOneAndUpdate(
         { _id: req.repo._id },
@@ -187,7 +169,6 @@ exports.handleWebhook = async (req, res) => {
   }
 };
 
-// Kiểm tra trạng thái webhook
 exports.checkWebhook = async (req, res, next) => {
   const logPrefix = "[checkWebhook]";
   try {
@@ -209,7 +190,6 @@ exports.checkWebhook = async (req, res, next) => {
   }
 };
 
-// Lấy danh sách webhook đã cấu hình
 exports.listWebhooks = async (req, res, next) => {
   const logPrefix = "[listWebhooks]";
   try {
@@ -219,20 +199,16 @@ exports.listWebhooks = async (req, res, next) => {
       return res.status(400).json({ error: "Missing user_id" });
     }
 
-    // Lấy danh sách Repo của user
     const repos = await Repo.find({ user_id }).select("_id user_id");
     const repoIds = repos.map((r) => r._id);
 
-    // Lấy RepoData tương ứng
     const repoDatas = await RepoData.find({ repo_id: { $in: repoIds } }).select("repo_id github_repo_id full_name owner name");
 
-    // Lấy danh sách Webhook
     const webhooks = await Webhook.find({ repo_id: { $in: repoIds } }).select(
       "repo_id active webhook_secret webhook_url events github_webhook_id status"
     );
 
     const webhookList = webhooks.map((w) => {
-      // const repo = repos.find((r) => r._id.toString() === w.repo_id.toString());
       const repoData = repoDatas.find((rd) => rd.repo_id.toString() === w.repo_id.toString());
       return {
         repo_id: w.repo_id,
@@ -269,7 +245,6 @@ exports.configureWebhook = async (req, res, next) => {
       return res.status(404).json({ error: "Repository not found" });
     }
 
-    // Lấy RepoData để truy cập owner và name
     const repoData = await RepoData.findOne({ repo_id });
     if (!repoData) {
       return res.status(404).json({ error: "RepoData not found" });
@@ -400,7 +375,6 @@ exports.configureWebhook = async (req, res, next) => {
   }
 };
 
-// Cập nhật webhook (chỉ secret hoặc active)
 exports.updateWebhook = async (req, res, next) => {
   const logPrefix = "[updateWebhook]";
   try {
@@ -509,5 +483,64 @@ exports.deleteWebhook = async (req, res, next) => {
       console.error(`${logPrefix} Response data: ${JSON.stringify(error.response.data)}`);
     }
     next(error);
+  }
+};
+
+exports.triggerSync = async (req, res, next) => {
+  const logPrefix = "[triggerSync]";
+  try {
+    const { repo_id } = req.body;
+
+    if (!repo_id) {
+      console.log(`${logPrefix} Missing repo_id`);
+      return res.status(400).json({ error: "Missing repo_id" });
+    }
+
+    const repo = await Repo.findById(repo_id);
+    if (!repo) {
+      console.log(`${logPrefix} Repository not found for repo_id=${repo_id}`);
+      return res.status(404).json({ error: "Repository not found" });
+    }
+
+    const repoData = await RepoData.findOne({ repo_id });
+    if (!repoData) {
+      console.log(`${logPrefix} RepoData not found for repo_id=${repo_id}`);
+      return res.status(404).json({ error: "RepoData not found" });
+    }
+
+    const url = repoData.html_url;
+    const token = repo.decryptToken();
+    const owner = repoData.owner.login;
+    const repoName = repoData.name;
+
+    await Repo.findOneAndUpdate(
+      { _id: repo_id },
+      { status: "Pending" },
+      { new: true }
+    );
+    console.log(`${logPrefix} Repository ${repoData.full_name} set to Pending state for sync`);
+
+    await retrieveQueue.add({
+      repoId: repo_id,
+      url,
+      token,
+      owner,
+      repo: repoName,
+      logPrefix,
+    });
+
+    console.log(`${logPrefix} Sync job added to queue for repo_id=${repo_id}`);
+    res.status(200).json({ message: "Sync triggered successfully" });
+  } catch (error) {
+    console.error(`${logPrefix} Error triggering sync: ${error.message}`);
+    if (req.body.repo_id) {
+      await Repo.findOneAndUpdate(
+        { _id: req.body.repo_id },
+        { status: "Failed" },
+        { new: true }
+      ).then(() => console.log(`${logPrefix} Repository set to Failed state for repo_id=${req.body.repo_id}`));
+    }
+    res.status(500).json({ error: "Failed to trigger sync",
+      details: error.message });
   }
 };

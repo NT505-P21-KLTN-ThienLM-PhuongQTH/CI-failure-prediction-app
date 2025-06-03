@@ -164,7 +164,7 @@ exports.deleteRepo = async (req, res, next) => {
     const deletedWorkflowsRuns = await WorkflowRun.deleteMany({ repo_id: repoId });
     console.log(`${logPrefix} Deleted ${deletedWorkflowsRuns.deletedCount} workflow runs for repository ${repoId}`);
 
-    res.status(200).json({ 
+    res.status(200).json({
       message: 'Repository deleted successfully',
       deletedRepo: deletedRepo.full_name,
       deletedWorkflows: deletedWorkflows.deletedCount,

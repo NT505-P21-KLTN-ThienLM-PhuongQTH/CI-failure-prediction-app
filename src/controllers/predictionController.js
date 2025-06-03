@@ -205,7 +205,6 @@ exports.getPredictions = async (req, res, next) => {
         const { github_run_id, model_name, project_name, branch } = req.query;
         const query = {};
 
-        // Thêm các điều kiện vào query nếu tham số tồn tại
         if (github_run_id) query.github_run_id = github_run_id;
         if (model_name) query.model_name = model_name;
         if (project_name) query.project_name = project_name;
@@ -246,7 +245,6 @@ exports.getBatchPredictions = async (req, res, next) => {
     try {
         const { github_run_ids, project_name, branch } = req.query;
 
-        // Kiểm tra các trường bắt buộc
         if (!github_run_ids || !project_name || !branch) {
             console.log(`${logPrefix} Missing github_run_ids, project_name, or branch`);
             return res.status(400).json({
@@ -255,7 +253,6 @@ exports.getBatchPredictions = async (req, res, next) => {
             });
         }
 
-        // Chuyển chuỗi thành mảng số
         const runIds = github_run_ids.split(',').map(id => id.trim());
 
         const predictions = await Prediction.find({
@@ -269,7 +266,6 @@ exports.getBatchPredictions = async (req, res, next) => {
             return res.status(200).json({});
         }
 
-        // Trả về đầy đủ thông tin prediction thay vì chỉ predicted_result
         const predictionsMap = predictions.reduce((acc, pred) => {
             acc[pred.github_run_id] = {
                 predicted_result: pred.predicted_result,
@@ -358,7 +354,6 @@ exports.getLatestPrediction = async (req, res, next) => {
     try {
         const { project_name, branch } = req.query;
 
-        // Kiểm tra các trường bắt buộc
         if (!project_name || !branch) {
             console.log(`${logPrefix} Missing project_name or branch`);
             return res.status(400).json({

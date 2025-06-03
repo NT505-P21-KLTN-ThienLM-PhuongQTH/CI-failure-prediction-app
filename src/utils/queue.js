@@ -5,7 +5,6 @@ const syncWorkflowsAndRuns = require('./syncWorkflowsAndRuns');
 const { retrieveQueue, syncQueue } = require('../config/redis');
 const { encryptToken } = require('./utils');
 
-// Hàm xử lý logic cho retrieveQueue
 const processRepoUpdate = async (job) => {
   const { repoId, url, token, owner, repo, logPrefix } = job.data;
   try {
@@ -70,11 +69,9 @@ const processRepoUpdate = async (job) => {
       throw new Error('Failed to update repository in database ' + error.message);
     }
 
-    // Kiểm tra xem RepoData đã tồn tại hay chưa
     let repoData = await RepoData.findOne({ repo_id: repoId });
 
     if (repoData) {
-      // Nếu đã tồn tại, cập nhật thông tin từ repoDetails
       repoData = await RepoData.findOneAndUpdate(
         { repo_id: repoId },
         {
@@ -143,7 +140,6 @@ const processRepoUpdate = async (job) => {
 
     console.log(`${logPrefix} Repository processed successfully: ${repoCheck.full_name}`);
 
-    // Đẩy công việc đồng bộ workflows và runs vào syncQueue
     await syncQueue.add({
       user_id: repoCheck.user_id,
       repoData,
@@ -164,7 +160,6 @@ const processRepoUpdate = async (job) => {
   }
 };
 
-// Worker xử lý syncQueue
 const processSyncQueue = async (job) => {
   const { user_id, repoData, logPrefix } = job.data;
   try {
@@ -177,7 +172,6 @@ const processSyncQueue = async (job) => {
   }
 };
 
-// Đăng ký worker cho các queue
 retrieveQueue.process(processRepoUpdate);
 syncQueue.process(processSyncQueue);
 

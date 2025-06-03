@@ -3,7 +3,6 @@ const router = express.Router();
 const webhookController = require('../controllers/webhookController');
 const { authenticateToken } = require('../middlewares/auth');
 
-// Middleware để xử lý Content-Type không chính xác
 const parseGitHubPayload = (req, res, next) => {
   if (req.headers["content-type"] === "application/x-www-form-urlencoded" && typeof req.body === "string") {
     try {
@@ -15,17 +14,13 @@ const parseGitHubPayload = (req, res, next) => {
   next();
 };
 
-router.post( "/",
-  express.json(),
-  parseGitHubPayload,
-  webhookController.verifyWebhook,
-  webhookController.handleWebhook
-);
+router.post( "/", express.json(), parseGitHubPayload, webhookController.verifyWebhook, webhookController.handleWebhook );
 router.use(authenticateToken);
 router.post("/configure", webhookController.configureWebhook);
 router.post("/update", webhookController.updateWebhook);
 router.post("/delete", webhookController.deleteWebhook);
 router.get("/check", webhookController.checkWebhook);
 router.get("/list", webhookController.listWebhooks);
+router.post('/trigger-sync', webhookController.triggerSync);
 
 module.exports = router;
