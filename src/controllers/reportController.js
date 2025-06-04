@@ -166,7 +166,7 @@ exports.getAllReports = async (req, res, next) => {
       status: report.status,
       reported_at: report.reported_at,
     })));
-    
+
     console.log(`${logPrefix} Retrieved ${reports.length} reports`);
   } catch (error) {
     console.error(`${logPrefix} Error: ${error.message}`);
