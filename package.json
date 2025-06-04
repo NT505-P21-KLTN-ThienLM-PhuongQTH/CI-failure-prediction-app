@@ -20,7 +20,8 @@
   },
   "homepage": "https://github.com/NT505-P21-KLTN-ThienLM-PhuongQTH/CI-failure-prediction-app#readme",
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.802.0",
+    "@aws-sdk/client-s3": "^3.824.0",
+    "@aws-sdk/s3-request-presigner": "^3.824.0",
     "axios": "^1.9.0",
     "axios-retry": "^4.5.0",
     "bcrypt": "^5.1.1",
