@@ -88,8 +88,29 @@ exports.getAllUserData = async (req, res, next) => {
   const logPrefix = "[getAllUserData]";
   try {
     const userData = await UserData.find().lean();
+
+    const updatedUserData = await Promise.all(
+      userData.map(async (user) => {
+        let avatarUrl = user.avatar;
+        if (avatarUrl && avatarUrl.includes('.amazonaws.com/') && !avatarUrl.includes('X-Amz-Algorithm')) {
+          try {
+            const key = avatarUrl.split('.amazonaws.com/')[1];
+            console.log(`${logPrefix} Extracted key: ${key}`);
+            avatarUrl = await getSignedUrl(s3, new GetObjectCommand({
+              Bucket: process.env.S3_BUCKET_NAME,
+              Key: key,
+            }), { expiresIn: 3600 });
+          } catch (error) {
+            console.error(`${logPrefix} Failed to generate pre-signed URL for user ${user.user_id}: ${error.message}`);
+            avatarUrl = user.avatar; // Fallback về URL gốc nếu lỗi
+          }
+        }
+        return { ...user, avatar: avatarUrl };
+      })
+    );
+
     console.log(`${logPrefix} All user data retrieved by admin ${req.user.id}`);
-    res.status(200).json(userData);
+    res.status(200).json(updatedUserData);
   } catch (error) {
     console.error(`${logPrefix} Error: ${error.message}`);
     next(error);
