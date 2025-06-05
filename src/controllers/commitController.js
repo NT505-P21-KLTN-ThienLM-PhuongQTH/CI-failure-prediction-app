@@ -4,65 +4,149 @@ const Commit = require('../models/Commit');
 exports.getUserCommits = async (req, res, next) => {
     const logPrefix = "[getUserCommits]";
     try {
-    // Lấy user_id từ query parameters
-    const { user_id } = req.query;
+        const { user_id, page = 1, limit = 10 } = req.query;
 
-    // Kiểm tra user_id hợp lệ
-    if (!user_id) {
-        console.log(`${logPrefix} Missing user_id in query`);
-        return res.status(400).json({ error: "Missing user_id in query" });
-    }
+        if (!user_id) {
+            console.log(`${logPrefix} Missing user_id in query`);
+            return res.status(400).json({ error: "Missing user_id in query" });
+        }
 
-    // Kiểm tra user_id có phải ObjectId hợp lệ
-    if (!mongoose.Types.ObjectId.isValid(user_id)) {
-        console.log(`${logPrefix} Invalid user_id format: ${user_id}`);
-        return res.status(400).json({ error: "Invalid user_id format" });
-    }
+        if (!mongoose.Types.ObjectId.isValid(user_id)) {
+            console.log(`${logPrefix} Invalid user_id format: ${user_id}`);
+            return res.status(400).json({ error: "Invalid user_id format" });
+        }
 
-    // Truy vấn commits của user
-    const commits = await Commit.find({ user_id })
-      .populate('workflow_run_id', 'name path') // Populate thông tin từ WorkflowRun (tên và path)
-      .sort({ createdAt: -1 }) // Sắp xếp theo thời gian tạo, mới nhất trước
-      .lean(); // Chuyển sang plain JavaScript object để dễ xử lý
+        const pageNum = parseInt(page, 10);
+        const limitNum = parseInt(limit, 10);
 
-    // Kiểm tra nếu không có commit nào
-    if (!commits || commits.length === 0) {
-        console.log(`${logPrefix} No commits found for user_id=${user_id}`);
-        return res.status(200).json([]);
-    }
+        if (pageNum < 1 || limitNum < 1) {
+            console.log(`${logPrefix} Invalid page or limit: page=${page}, limit=${limit}`);
+            return res.status(400).json({ error: "Invalid page or limit" });
+        }
 
-    // Định dạng dữ liệu trả về cho UI
-    const commitList = commits.map((commit) => ({
-        id: commit._id.toString(),
-        workflow_run_id: commit.workflow_run_id._id.toString(),
-        sha: commit.sha,
-        commit: {
-            author: {
-                name: commit.commit.author.name,
-                email: commit.commit.author.email,
-                date: commit.commit.author.date,
+        const commits = await Commit.find({ user_id })
+            .populate('workflow_run_id', 'name path')
+            .sort({ 'commit.author.date': -1 })
+            .skip((pageNum - 1) * limitNum)
+            .limit(limitNum)
+            .lean();
+
+        if (!commits || commits.length === 0) {
+            console.log(`${logPrefix} No commits found for user_id=${user_id}, page=${pageNum}`);
+            return res.status(200).json({
+                commits: [],
+                pagination: {
+                    page: pageNum,
+                    limit: limitNum,
+                    total: 0
+                }
+            });
+        }
+
+        const totalCommits = await Commit.countDocuments({ user_id });
+
+        const commitList = commits.map((commit) => ({
+            id: commit._id.toString(),
+            workflow_run_id: commit.workflow_run_id?._id.toString(),
+            sha: commit.sha,
+            commit: {
+                author: {
+                    name: commit.commit.author.name,
+                    email: commit.commit.author.email,
+                    date: commit.commit.author.date
+                },
+                message: commit.commit.message
             },
-            message: commit.commit.message,
-        },
-        author: {
-            login: commit.author.login,
-            avatar_url: commit.author.avatar_url,
-            html_url: commit.author.html_url,
-        },
-        html_url: commit.html_url,
-        stats: {
-            total: commit.stats.total,
-            additions: commit.stats.additions,
-            deletions: commit.stats.deletions,
-        },
-        created_at: commit.createdAt,
-        updated_at: commit.updatedAt,
+            author: {
+                login: commit.author.login,
+                avatar_url: commit.author.avatar_url,
+                html_url: commit.author.html_url
+            },
+            html_url: commit.html_url,
+            stats: {
+                total: commit.stats.total,
+                additions: commit.stats.additions,
+                deletions: commit.stats.deletions
+            }
         }));
 
-    console.log(`${logPrefix} Found ${commitList.length} commits for user_id=${user_id}`);
-    res.status(200).json(commitList);
+        console.log(`${logPrefix} Found ${commitList.length} commits for user_id=${user_id}, page=${pageNum}`);
+        res.status(200).json({
+            commits: commitList,
+            pagination: {
+                page: pageNum,
+                limit: limitNum,
+                total: totalCommits
+            }
+        });
     } catch (error) {
         console.error(`${logPrefix} Error fetching commits: ${error.message}`);
+        next(error);
+    }
+};
+
+exports.getRecentCommits = async (req, res, next) => {
+    const logPrefix = "[getRecentCommits]";
+    try {
+        const { user_id, limit = 5 } = req.query;
+
+        if (!user_id) {
+            console.log(`${logPrefix} Missing user_id in query`);
+            return res.status(400).json({ error: "Missing user_id in query" });
+        }
+
+        if (!mongoose.Types.ObjectId.isValid(user_id)) {
+            console.log(`${logPrefix} Invalid user_id format: ${user_id}`);
+            return res.status(400).json({ error: "Invalid user_id format" });
+        }
+
+        const limitNum = parseInt(limit, 10);
+
+        if (limitNum < 1) {
+            console.log(`${logPrefix} Invalid limit: limit=${limit}`);
+            return res.status(400).json({ error: "Invalid limit" });
+        }
+
+        const commits = await Commit.find({ user_id })
+            .populate('workflow_run_id', 'name path')
+            .sort({ 'commit.author.date': -1 })
+            .limit(limitNum)
+            .lean();
+
+        if (!commits || commits.length === 0) {
+            console.log(`${logPrefix} No commits found for user_id=${user_id}`);
+            return res.status(200).json([]);
+        }
+
+        const commitList = commits.map((commit) => ({
+            id: commit._id.toString(),
+            workflow_run_id: commit.workflow_run_id?._id.toString(),
+            sha: commit.sha,
+            commit: {
+                author: {
+                    name: commit.commit.author.name,
+                    email: commit.commit.author.email,
+                    date: commit.commit.author.date
+                },
+                message: commit.commit.message
+            },
+            author: {
+                login: commit.author.login,
+                avatar_url: commit.author.avatar_url,
+                html_url: commit.author.html_url
+            },
+            html_url: commit.html_url,
+            stats: {
+                total: commit.stats.total,
+                additions: commit.stats.additions,
+                deletions: commit.stats.deletions
+            }
+        }));
+
+        console.log(`${logPrefix} Found ${commitList.length} recent commits for user_id=${user_id}`);
+        res.status(200).json(commitList);
+    } catch (error) {
+        console.error(`${logPrefix} Error fetching recent commits: ${error.message}`);
         next(error);
     }
 };

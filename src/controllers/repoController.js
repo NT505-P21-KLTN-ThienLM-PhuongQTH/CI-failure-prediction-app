@@ -89,6 +89,30 @@ exports.getUserRepos = async (req, res, next) => {
   }
 };
 
+exports.getAllUserRepos = async (req, res, next) => {
+  const logPrefix = '[getAllUserRepos]';
+  try {
+    const repos = await Repo.find({}).lean();
+    if (!repos || repos.length === 0) {
+      console.log(`${logPrefix} No repositories found`);
+      return res.status(404).json({ error: 'No repositories found' });
+    }
+
+    console.log(`${logPrefix} All repositories retrieved by admin: ${req.user.id}`);
+    res.status(200).json(repos.map(repo => ({
+      id: repo._id.toString(),
+      user_id: repo.user_id,
+      full_name: repo.full_name,
+      name: repo.name,
+      html_url: repo.html_url,
+      status: repo.status,
+    })));
+  } catch (error) {
+    console.error(`${logPrefix} Error: ${error.message}`);
+    next(error);
+  }
+};
+
 exports.updateRepo = async (req, res, next) => {
   const logPrefix = '[updateRepo]';
   try {
@@ -161,16 +185,24 @@ exports.deleteRepo = async (req, res, next) => {
     const deletedWorkflows = await Workflow.deleteMany({ repo_id: repoId });
     console.log(`${logPrefix} Deleted ${deletedWorkflows.deletedCount} workflows for repository ${repoId}`);
 
+    const workflowRuns = await WorkflowRun.find({ repo_id: repoId }, '_id');
+    const workflowRunIds = workflowRuns.map(run => run._id);
+
     const deletedWorkflowsRuns = await WorkflowRun.deleteMany({ repo_id: repoId });
     console.log(`${logPrefix} Deleted ${deletedWorkflowsRuns.deletedCount} workflow runs for repository ${repoId}`);
+
+    const deletedCommits = await Commit.deleteMany({ workflow_run_id: { $in: workflowRunIds } });
+    console.log(`${logPrefix} Deleted ${deletedCommits.deletedCount} commits for repository ${repoId}`);
 
     res.status(200).json({
       message: 'Repository deleted successfully',
       deletedRepo: deletedRepo.full_name,
       deletedWorkflows: deletedWorkflows.deletedCount,
-      deletedWorkflowsRuns: deletedWorkflowsRuns.deletedCount
+      deletedWorkflowsRuns: deletedWorkflowsRuns.deletedCount,
+      deletedCommits: deletedCommits.deletedCount
     });
   } catch (error) {
+    console.error(`${logPrefix} Error deleting repository: ${error.message}`);
     next(error);
   }
 };

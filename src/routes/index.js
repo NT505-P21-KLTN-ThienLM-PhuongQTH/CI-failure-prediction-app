@@ -19,8 +19,8 @@ router.use('/webhooks', webhookRoutes);
 router.use('/ml_model', mlModelRoutes);
 router.use('/prediction', predictionRoutes);
 router.use('/report', reportRoutes)
-router.use(authenticateToken);
 router.use('/user', userRoutes);
+router.use(authenticateToken);
 router.use('/userdata', userDataRoutes);
 router.use('/repos', repoRoutes);
 router.use('/repodata', repoDataRoutes);
