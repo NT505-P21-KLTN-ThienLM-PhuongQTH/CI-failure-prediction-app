@@ -1,9 +1,10 @@
 const crypto = require("crypto");
 const axios = require("axios");
-const { retrieveQueue, syncQueue } = require("../utils/queue");
+const { retrieveQueue } = require("../utils/queue");
 const Repo = require("../models/Repo");
 const RepoData = require("../models/RepoData");
 const Webhook = require("../models/Webhook");
+const { extractOwnerRepo } = require("../utils/utils");
 
 // Hàm mã hóa webhook_secret
 const encryptWebhookSecret = (secret) => {
@@ -505,20 +506,19 @@ exports.triggerSync = async (req, res, next) => {
     const repoData = await RepoData.findOne({ repo_id });
     if (!repoData) {
       console.log(`${logPrefix} RepoData not found for repo_id=${repo_id}`);
-      return res.status(404).json({ error: "RepoData not found" });
     }
 
-    const url = repoData.html_url;
+    const url = (repoData && repoData.html_url) ? repoData.html_url : repo.html_url;
     const token = repo.decryptToken();
-    const owner = repoData.owner.login;
-    const repoName = repoData.name;
+    const owner = repoData && repoData.owner && repoData.owner.login ? repoData.owner.login : extractOwnerRepo(url).owner;
+    const repoName = repoData && repoData.name ? repoData.name : extractOwnerRepo(url).repo;
 
     await Repo.findOneAndUpdate(
       { _id: repo_id },
       { status: "Pending" },
       { new: true }
     );
-    console.log(`${logPrefix} Repository ${repoData.full_name} set to Pending state for sync`);
+    console.log(`${logPrefix} Repository ${repoName} set to Pending state for sync`);
 
     await retrieveQueue.add({
       repoId: repo_id,

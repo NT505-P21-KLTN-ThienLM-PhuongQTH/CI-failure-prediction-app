@@ -29,7 +29,7 @@ const checkRepoExists = async (owner, repo, token) => {
             },
         });
 
-    return response.status === 200;
+        return response.status === 200;
     } catch (error) {
         if (error.response && error.response.status === 404) {
             return false;
@@ -41,18 +41,18 @@ const checkRepoExists = async (owner, repo, token) => {
 };
 
 const extractBranchFromHtmlUrl = (htmlUrl) => {
-  try {
-    const urlParts = htmlUrl.split("/blob/");
-    if (urlParts.length < 2) {
-      throw new Error("Invalid html_url format");
+    try {
+        const urlParts = htmlUrl.split("/blob/");
+        if (urlParts.length < 2) {
+            throw new Error("Invalid html_url format");
+        }
+        const branchAndPath = urlParts[1].split("/");
+        const branch = branchAndPath[0];
+        return branch;
+    } catch (error) {
+        console.error("[extractBranchFromHtmlUrl] Error:", error.message);
+        throw new Error("Failed to extract branch from html_url");
     }
-    const branchAndPath = urlParts[1].split("/");
-    const branch = branchAndPath[0];
-    return branch;
-  } catch (error) {
-    console.error("[extractBranchFromHtmlUrl] Error:", error.message);
-    throw new Error("Failed to extract branch from html_url");
-  }
 };
 
-module.exports = { encryptToken, extractOwnerRepo, checkRepoExists, extractBranchFromHtmlUrl};
+module.exports = { encryptToken, extractOwnerRepo, checkRepoExists, extractBranchFromHtmlUrl };
