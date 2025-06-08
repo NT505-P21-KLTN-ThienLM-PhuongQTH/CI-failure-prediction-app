@@ -1,4 +1,3 @@
-// models/Repo.js
 const mongoose = require('mongoose');
 const crypto = require('crypto');
 
@@ -7,8 +6,9 @@ const RepoSchema = new mongoose.Schema({
   full_name: { type: String, required: true },
   name: { type: String, required: true },
   html_url: { type: String },
-  status: { type: String, enum: ['Pending', 'Success', 'Failed'], default: 'Pending' },
+  status: { type: String, enum: ['Queued', 'Pending', 'Success', 'Failed'], default: 'Queued' },
   token: { type: String, required: true }, // Token mã hóa
+  request_id: { type: String, required: false }, // ID của request
 }, { timestamps: true });
 
 // Mã hóa token trước khi lưu

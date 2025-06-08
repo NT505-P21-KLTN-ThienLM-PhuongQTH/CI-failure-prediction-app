@@ -179,27 +179,53 @@ exports.deleteRepo = async (req, res, next) => {
 
     console.log(`${logPrefix} Repository deleted successfully: ${deletedRepo.full_name}`);
 
-    await RepoData.deleteOne({ repo_id: repoId });
+    const deletedRepoData = await RepoData.deleteOne({ repo_id: repoId });
+    if (deletedRepoData.deletedCount === 0) {
+      console.log(`${logPrefix} RepoData not found for repository ${repoId}`);
+      return res.status(404).json({ error: 'RepoData not found for this repository' });
+    }
     console.log(`${logPrefix} Deleted repo data for repository ${repoId}`);
 
-    const deletedWorkflows = await Workflow.deleteMany({ repo_id: repoId });
-    console.log(`${logPrefix} Deleted ${deletedWorkflows.deletedCount} workflows for repository ${repoId}`);
+    let deletedWorkflowsCount = 0;
+    let deletedWorkflowsRunsCount = 0;
+    let deletedCommitsCount = 0;
 
-    const workflowRuns = await WorkflowRun.find({ repo_id: repoId }, '_id');
-    const workflowRunIds = workflowRuns.map(run => run._id);
+    try {
+      const deletedWorkflows = await Workflow.deleteMany({ repo_id: repoId });
+      deletedWorkflowsCount = deletedWorkflows.deletedCount || 0;
+      console.log(`${logPrefix} Deleted ${deletedWorkflowsCount} workflows for repository ${repoId}`);
+    } catch (e) {
+      console.log(`${logPrefix} No workflows found or error deleting workflows for repository ${repoId}`);
+    }
 
-    const deletedWorkflowsRuns = await WorkflowRun.deleteMany({ repo_id: repoId });
-    console.log(`${logPrefix} Deleted ${deletedWorkflowsRuns.deletedCount} workflow runs for repository ${repoId}`);
+    let workflowRunIds = [];
+    try {
+      const workflowRuns = await WorkflowRun.find({ repo_id: repoId }, '_id');
+      workflowRunIds = workflowRuns.map(run => run._id);
+      const deletedWorkflowsRuns = await WorkflowRun.deleteMany({ repo_id: repoId });
+      deletedWorkflowsRunsCount = deletedWorkflowsRuns.deletedCount || 0;
+      console.log(`${logPrefix} Deleted ${deletedWorkflowsRunsCount} workflow runs for repository ${repoId}`);
+    } catch (e) {
+      console.log(`${logPrefix} No workflow runs found or error deleting workflow runs for repository ${repoId}`);
+    }
 
-    const deletedCommits = await Commit.deleteMany({ workflow_run_id: { $in: workflowRunIds } });
-    console.log(`${logPrefix} Deleted ${deletedCommits.deletedCount} commits for repository ${repoId}`);
+    try {
+      if (workflowRunIds.length > 0) {
+        const deletedCommits = await Commit.deleteMany({ workflow_run_id: { $in: workflowRunIds } });
+        deletedCommitsCount = deletedCommits.deletedCount || 0;
+        console.log(`${logPrefix} Deleted ${deletedCommitsCount} commits for repository ${repoId}`);
+      }
+    } catch (e) {
+      console.log(`${logPrefix} No commits found or error deleting commits for repository ${repoId}`);
+    }
 
     res.status(200).json({
       message: 'Repository deleted successfully',
       deletedRepo: deletedRepo.full_name,
-      deletedWorkflows: deletedWorkflows.deletedCount,
-      deletedWorkflowsRuns: deletedWorkflowsRuns.deletedCount,
-      deletedCommits: deletedCommits.deletedCount
+      deletedRepoData: deletedRepoData.deletedCount,
+      deletedWorkflows: deletedWorkflowsCount,
+      deletedWorkflowsRuns: deletedWorkflowsRunsCount,
+      deletedCommits: deletedCommitsCount
     });
   } catch (error) {
     console.error(`${logPrefix} Error deleting repository: ${error.message}`);

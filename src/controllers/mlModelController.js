@@ -8,7 +8,7 @@ exports.getModelInfo = async (req, res, next) => {
         const { model_name } = req.query;
 
         // Kiểm tra model_name hợp lệ
-        const validModels = ['Stacked-LSTM', 'Bi-LSTM', 'Conv-LSTM'];
+        const validModels = ['Stacked-LSTM', 'Stacked-BiLSTM', 'Conv-LSTM'];
         if (!model_name || !validModels.includes(model_name)) {
             console.log(`${logPrefix} Invalid or missing model_name: ${model_name}`);
             return res.status(400).json({
@@ -93,16 +93,73 @@ exports.getModelInfo = async (req, res, next) => {
 exports.getAllModels = async (req, res, next) => {
     const logPrefix = "[getAllModels]";
     try {
-        // Lấy toàn bộ models từ DB
-        const models = await MLModel.find().sort({ last_updated_timestamp: -1 }).lean();
+        const validModels = ['Stacked-LSTM', 'Stacked-BiLSTM', 'Conv-LSTM'];
 
-        if (!models || models.length === 0) {
-            console.log(`${logPrefix} No models found in DB`);
+        const modelPromises = validModels.map(async (model_name) => {
+            try {
+                const existingModel = await MLModel.findOne({ name: model_name }).lean();
+                const mlflowUrl = `${process.env.MLFLOW_API_URL}/registered-models/get?name=${model_name}`;
+                const response = await axios.get(mlflowUrl);
+                const modelData = response.data?.registered_model;
+
+                if (!modelData) {
+                    console.log(`${logPrefix} No model data found for model_name=${model_name}`);
+                    return null;
+                }
+
+                const creationTimestamp = new Date(modelData.creation_timestamp);
+                const lastUpdatedTimestamp = new Date(modelData.last_updated_timestamp);
+                const latestVersions = modelData.latest_versions.map((version) => ({
+                    name: version.name,
+                    version: version.version,
+                    creation_timestamp: new Date(version.creation_timestamp),
+                    last_updated_timestamp: new Date(version.last_updated_timestamp),
+                    current_stage: version.current_stage,
+                    description: version.description,
+                    source: version.source,
+                    run_id: version.run_id,
+                    status: version.status,
+                    run_link: version.run_link,
+                }));
+
+                if (
+                    !existingModel ||
+                    existingModel.last_updated_timestamp.getTime() !== lastUpdatedTimestamp.getTime()
+                ) {
+                    const updatedModel = await MLModel.findOneAndUpdate(
+                        { name: model_name },
+                        {
+                            name: model_name,
+                            creation_timestamp: creationTimestamp,
+                            last_updated_timestamp: lastUpdatedTimestamp,
+                            latest_versions: latestVersions,
+                            is_current: existingModel ? existingModel.is_current : false,
+                        },
+                        { upsert: true, new: true, setDefaultsOnInsert: true }
+                    );
+                    console.log(`${logPrefix} Model ${model_name} saved/updated in DB`);
+                    return updatedModel;
+                } else {
+                    console.log(`${logPrefix} Model ${model_name} is up-to-date, no update needed`);
+                    return existingModel;
+                }
+            } catch (apiError) {
+                console.error(`${logPrefix} Error fetching model ${model_name} from MLflow: ${apiError.message}`);
+                return null;
+            }
+        });
+
+        const models = (await Promise.all(modelPromises)).filter(model => model !== null);
+
+        const dbModels = await MLModel.find().sort({ last_updated_timestamp: -1 }).lean();
+
+        if (!dbModels || dbModels.length === 0) {
+            console.log(`${logPrefix} No models found in DB after syncing with MLflow`);
             return res.status(200).json([]);
         }
 
-        console.log(`${logPrefix} Found ${models.length} models in DB`);
-        const responseModels = models.map((model) => ({
+        console.log(`${logPrefix} Found ${dbModels.length} models in DB`);
+        const responseModels = dbModels.map((model) => ({
             id: model._id,
             name: model.name,
             creation_timestamp: model.creation_timestamp,
@@ -110,6 +167,7 @@ exports.getAllModels = async (req, res, next) => {
             latest_versions: model.latest_versions,
             is_current: model.is_current,
         }));
+
         res.status(200).json(responseModels);
     } catch (error) {
         console.error(`${logPrefix} Error fetching all models: ${error.message}`);

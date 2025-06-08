@@ -1,7 +1,9 @@
 const mongoose = require('mongoose');
 const Repo = require('../models/Repo');
+const RepoData = require('../models/RepoData');
 const WorkflowRun = require('../models/WorkflowRun');
 const Prediction = require('../models/Prediction');
+const axios = require('axios');
 
 exports.getBranchesWithRuns = async (req, res, next) => {
     try {
@@ -365,6 +367,92 @@ exports.getWorkflowRunDetails = async (req, res, next) => {
         res.status(200).json(run);
     } catch (error) {
         console.error('Error in getWorkflowRunDetails:', error);
+        next(error);
+    }
+};
+
+exports.rerunWorkflowRun = async (req, res, next) => {
+    const logPrefix = '[rerunWorkflowRun]';
+    try {
+        const runId = req.params.id;
+        const user_id = req.query.user_id;
+
+        if (!runId) {
+            console.log(`${logPrefix} Missing run_id`);
+            return res.status(400).json({ error: 'Missing run_id' });
+        }
+
+        if (!mongoose.Types.ObjectId.isValid(runId)) {
+            console.log(`${logPrefix} Invalid run_id: ${runId}`);
+            return res.status(400).json({ error: 'Invalid run_id', details: 'run_id must be a valid MongoDB ObjectId' });
+        }
+
+        if (!user_id) {
+            console.log(`${logPrefix} Missing user_id`);
+            return res.status(400).json({ error: 'Missing user_id' });
+        }
+
+        const userIdObject = new mongoose.Types.ObjectId(String(user_id));
+        const runIdObject = new mongoose.Types.ObjectId(runId);
+
+        // Tìm WorkflowRun
+        const run = await WorkflowRun.findOne({ _id: runIdObject, user_id: userIdObject }).lean();
+        if (!run) {
+            console.log(`${logPrefix} Workflow run not found for run_id: ${runId} and user_id: ${user_id}`);
+            return res.status(404).json({ error: 'Workflow run not found' });
+        }
+
+        // Tìm Repo
+        const repo = await Repo.findById(run.repo_id);
+        if (!repo) {
+            console.log(`${logPrefix} Repository not found for repo_id: ${run.repo_id}`);
+            return res.status(404).json({ error: 'Repository not found' });
+        }
+
+        // Tìm RepoData
+        const repoData = await RepoData.findOne({ repo_id: run.repo_id }).lean();
+        if (!repoData) {
+            console.log(`${logPrefix} RepoData not found for repo_id: ${run.repo_id}`);
+            return res.status(404).json({ error: 'RepoData not found' });
+        }
+
+        // Giải mã token và lấy owner, repoName
+        const token = repo.decryptToken();
+        const owner = repoData.owner.login;
+        const repoName = repo.name;
+
+        // Gọi GitHub API để re-run
+        console.log(`${logPrefix} Calling GitHub API to re-run workflow run_id: ${run.github_run_id}`);
+        const response = await axios.post(
+            `https://api.github.com/repos/${owner}/${repoName}/actions/runs/${run.github_run_id}/rerun`,
+            {},
+            {
+                headers: {
+                    'Accept': 'application/vnd.github+json',
+                    'Authorization': `Bearer ${token}`,
+                    'X-GitHub-Api-Version': '2022-11-28'
+                },
+                timeout: 30000
+            }
+        );
+
+        console.log(`${logPrefix} GitHub API response: ${JSON.stringify(response.data, null, 2)}`);
+
+        // Trả về kết quả
+        res.status(202).json({
+            message: 'Workflow run re-run initiated successfully',
+            github_run_id: run.github_run_id,
+            html_url: response.data.html_url || run.html_url
+        });
+    } catch (error) {
+        console.error(`${logPrefix} Error in rerunWorkflowRun: ${error.message}`);
+        if (error.response) {
+            console.error(`${logPrefix} GitHub API error: ${JSON.stringify(error.response.data, null, 2)}`);
+            return res.status(error.response.status).json({
+                error: 'Failed to re-run workflow',
+                details: error.response.data.message || error.message
+            });
+        }
         next(error);
     }
 };

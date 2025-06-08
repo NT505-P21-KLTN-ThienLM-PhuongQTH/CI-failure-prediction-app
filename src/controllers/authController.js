@@ -63,7 +63,7 @@ const login = async (req, res) => {
             return res.status(401).json({ message: "Invalid email or password" });
         }
 
-        const token = jwt.sign({ id: user._id }, jwtConfig.secret, { expiresIn: jwtConfig.expiresIn });
+        const token = jwt.sign({ id: user._id, role: user.role }, jwtConfig.secret, { expiresIn: jwtConfig.expiresIn });
 
         console.log(`${logPrefix} Login successful for ${email}`);
         res.status(200).json({
