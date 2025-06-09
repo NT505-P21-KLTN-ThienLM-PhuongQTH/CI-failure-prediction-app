@@ -155,7 +155,7 @@ exports.handleAdminAction = async (req, res, next) => {
 exports.getAllReports = async (req, res, next) => {
   const logPrefix = '[getAllReports]';
   try {
-    const reports = await Report.find().lean();
+    const reports = await Report.find().sort({ reported_at: -1 }).lean();
     res.status(200).json(reports.map(report => ({
       id: report._id.toString(),
       github_run_id: report.github_run_id,
