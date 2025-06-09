@@ -460,22 +460,38 @@ exports.deleteWebhook = async (req, res, next) => {
       return res.status(404).json({ error: "Webhook not found" });
     }
 
+    let githubDeleteError = null;
     if (webhook.github_webhook_id) {
       const decryptedToken = repo.decryptToken();
       const owner = repoData.owner.login;
       const name = repoData.name;
-      await axios.delete(
-        `https://api.github.com/repos/${owner}/${name}/hooks/${webhook.github_webhook_id}`,
-        {
-          headers: {
-            Authorization: `token ${decryptedToken}`,
-            Accept: "application/vnd.github.v3+json",
-          },
+      try {
+        await axios.delete(
+          `https://api.github.com/repos/${owner}/${name}/hooks/${webhook.github_webhook_id}`,
+          {
+            headers: {
+              Authorization: `token ${decryptedToken}`,
+              Accept: "application/vnd.github.v3+json",
+            },
+          }
+        );
+      } catch (error) {
+        githubDeleteError = error;
+        console.error(`${logPrefix} Failed to delete webhook on GitHub: ${error.message}`);
+        if (error.response) {
+          console.error(`${logPrefix} Response data: ${JSON.stringify(error.response.data)}`);
         }
-      );
+      }
     }
 
     await Webhook.findOneAndDelete({ repo_id });
+
+    if (githubDeleteError) {
+      return res.status(200).json({
+        message: "Webhook deleted from database, but failed to delete from GitHub",
+        githubError: githubDeleteError.message
+      });
+    }
 
     res.status(200).json({ message: "Webhook deleted successfully" });
   } catch (error) {
@@ -508,10 +524,13 @@ exports.triggerSync = async (req, res, next) => {
       console.log(`${logPrefix} RepoData not found for repo_id=${repo_id}`);
     }
 
-    const url = (repoData && repoData.html_url) ? repoData.html_url : repo.html_url;
+    const url = repoData?.html_url || repo.html_url;
     const token = repo.decryptToken();
-    const owner = repoData && repoData.owner && repoData.owner.login ? repoData.owner.login : extractOwnerRepo(url).owner;
-    const repoName = repoData && repoData.name ? repoData.name : extractOwnerRepo(url).repo;
+    const owner = repoData?.owner?.login || extractOwnerRepo(url).owner;
+    const repoName = repoData?.name || extractOwnerRepo(url).repo;
+
+    // Log để debug token trước khi thêm vào queue
+    console.log(`${logPrefix} Original token length: ${repo.token.length}, Decrypted token length: ${token.length}`);
 
     await Repo.findOneAndUpdate(
       { _id: repo_id },
@@ -538,9 +557,9 @@ exports.triggerSync = async (req, res, next) => {
         { _id: req.body.repo_id },
         { status: "Failed" },
         { new: true }
-      ).then(() => console.log(`${logPrefix} Repository set to Failed state for repo_id=${req.body.repo_id}`));
+      );
+      console.log(`${logPrefix} Repository set to Failed state for repo_id=${req.body.repo_id}`);
     }
-    res.status(500).json({ error: "Failed to trigger sync",
-      details: error.message });
+    res.status(500).json({ error: "Failed to trigger sync", details: error.message });
   }
 };

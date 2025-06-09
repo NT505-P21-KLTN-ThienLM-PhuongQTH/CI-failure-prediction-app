@@ -106,18 +106,16 @@ redis.on('message', async (channel, message) => {
       return;
     }
 
-    // Tách owner và repoName từ full_name
     const [owner, repoName] = repo.full_name.split('/');
     if (!owner || !repoName) {
       throw new Error(`Invalid full_name format: ${repo.full_name}`);
     }
 
-    const { url, token } = repo;
+    const { url } = repo;
 
-    // Nếu data từ Ruby không đủ, gọi GET /repos
     let repoDetails = data;
-    if (!repoDetails || !repoDetails.id) {
-      console.log(`${logPrefix} Calling GET /repos/${owner}/${repoName}`);
+    if (!repoDetails || !repoDetails.id || !repoDetails.owner?.login) {
+      console.log(`${logPrefix} Calling GET /repos/${owner}/${repoName} due to incomplete data`);
       const repoResponse = await retryRequest({
         method: 'get',
         url: `${process.env.GHTORRENT_API_URL}/repos/${owner}/${repoName}`
@@ -136,14 +134,11 @@ redis.on('message', async (channel, message) => {
       throw new Error('Repository ID missing');
     }
 
-    const encryptedToken = encryptToken(token);
-
     const updatedRepo = await Repo.findOneAndUpdate(
       { _id: repo._id },
       {
         full_name: repoDetails.full_name || repo.full_name,
         name: repoDetails.name || repoName,
-        token: encryptedToken,
         status: 'Success',
         html_url: repoDetails.html_url || url,
       },

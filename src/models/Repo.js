@@ -26,6 +26,22 @@ RepoSchema.pre('save', function(next) {
   next();
 });
 
+// Mã hóa token khi update
+RepoSchema.pre('findOneAndUpdate', function(next) {
+  const update = this.getUpdate();
+  if (update && update.token) {
+    const secret = process.env.ENCRYPTION_SECRET;
+    const key = crypto.createHash('sha256').update(secret).digest();
+    const iv = Buffer.alloc(16, 0);
+
+    const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+    let encrypted = cipher.update(update.token, 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    update.token = encrypted;
+  }
+  next();
+});
+
 // Phương thức giải mã token
 RepoSchema.methods.decryptToken = function() {
   const secret = process.env.ENCRYPTION_SECRET;
