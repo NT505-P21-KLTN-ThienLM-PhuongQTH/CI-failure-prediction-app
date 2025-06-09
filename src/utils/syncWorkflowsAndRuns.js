@@ -14,8 +14,6 @@ const syncWorkflowsAndRuns = async (user_id, repo, logPrefix) => {
     if (!process.env.GHTORRENT_API_URL) {
       throw new Error('GHTORRENT_API_URL environment variable is not set');
     }
-    console.log(`Using GHTORRENT_API_URL: ${process.env.GHTORRENT_API_URL}`);
-
     owner = repo.owner.login;
     repoName = repo.name;
 
@@ -72,7 +70,7 @@ const syncWorkflowsAndRuns = async (user_id, repo, logPrefix) => {
     }
 
     const runs = runsResponse.data;
-    console.log(`${logPrefix} Workflow runs for ${owner}/${repoName}:`, runs);
+    // console.log(`${logPrefix} Workflow runs for ${owner}/${repoName}:`, runs);
 
     for (const run of runs) {
       if (!run.workflow_id || !run.github_id) {
@@ -141,7 +139,16 @@ const syncWorkflowsAndRuns = async (user_id, repo, logPrefix) => {
             const project_name = `${owner}/${repoName}`;
             const branch = run.head_branch;
 
-            // Tạo Report
+            // Kiểm tra trạng thái Report hiện tại
+            console.log(`${logPrefix} Checking existing report for github_run_id=${run.github_id}`);
+            const existingReport = await Report.findOne({ github_run_id: run.github_id }).lean();
+
+            if (existingReport && ['approved', 'rejected'].includes(existingReport.status)) {
+              console.log(`${logPrefix} Report for github_run_id=${run.github_id} is already ${existingReport.status}, skipping report creation and email`);
+              continue;
+            }
+
+            // Tạo Report nếu không có hoặc status là pending
             console.log(`${logPrefix} Creating report for mismatch github_run_id=${run.github_id}`);
             const report = await Report.create({
               github_run_id: run.github_id,
@@ -149,6 +156,7 @@ const syncWorkflowsAndRuns = async (user_id, repo, logPrefix) => {
               project_name,
               branch,
               reported_by: 'system',
+              status: 'pending', // Đảm bảo status mặc định
             });
 
             // Gửi email
