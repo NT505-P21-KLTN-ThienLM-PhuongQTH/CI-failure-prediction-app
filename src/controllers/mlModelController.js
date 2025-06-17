@@ -8,7 +8,7 @@ exports.getModelInfo = async (req, res, next) => {
         const { model_name } = req.query;
 
         // Kiểm tra model_name hợp lệ
-        const validModels = ['Stacked-LSTM', 'Stacked-BiLSTM', 'Conv-LSTM'];
+        const validModels = ['Stacked-LSTM', 'Stacked-BiLSTM', 'ConvLSTM'];
         if (!model_name || !validModels.includes(model_name)) {
             console.log(`${logPrefix} Invalid or missing model_name: ${model_name}`);
             return res.status(400).json({
@@ -93,7 +93,7 @@ exports.getModelInfo = async (req, res, next) => {
 exports.getAllModels = async (req, res, next) => {
     const logPrefix = "[getAllModels]";
     try {
-        const validModels = ['Stacked-LSTM', 'Stacked-BiLSTM', 'Conv-LSTM'];
+        const validModels = ['Stacked-LSTM', 'Stacked-BiLSTM', 'ConvLSTM'];
 
         const modelPromises = validModels.map(async (model_name) => {
             try {

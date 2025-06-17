@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 const MLModelSchema = new mongoose.Schema({
-    name: { type: String, required: true, unique: true }, // Tên model: Stacked-LSTM, Bi-LSTM, Conv-LSTM
+    name: { type: String, required: true, unique: true }, // Tên model: Stacked-LSTM, Bi-LSTM, ConvLSTM
     creation_timestamp: { type: Date, required: true }, // Chuyển timestamp thành Date
     last_updated_timestamp: { type: Date, required: true }, // Chuyển timestamp thành Date
     latest_versions: [
