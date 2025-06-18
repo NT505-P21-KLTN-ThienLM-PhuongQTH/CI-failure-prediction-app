@@ -2,6 +2,9 @@ const Repo = require('../models/Repo');
 const RepoData = require('../models/RepoData');
 const Workflow = require('../models/Workflow');
 const WorkflowRun = require('../models/WorkflowRun');
+const Commit = require('../models/Commit');
+const Prediction = require('../models/Prediction');
+const Report = require('../models/Report');
 const { retrieveQueue } = require('../utils/queue');
 const { extractOwnerRepo, checkRepoExists } = require('../utils/utils');
 
@@ -179,34 +182,41 @@ exports.deleteRepo = async (req, res, next) => {
 
     console.log(`${logPrefix} Repository deleted successfully: ${deletedRepo.full_name}`);
 
-    const deletedRepoData = await RepoData.deleteOne({ repo_id: repoId });
-    if (deletedRepoData.deletedCount === 0) {
-      console.log(`${logPrefix} RepoData not found for repository ${repoId}`);
-      return res.status(404).json({ error: 'RepoData not found for this repository' });
+    let deletedRepoDataCount = 0;
+    try {
+      const deletedRepoData = await RepoData.deleteOne({ repo_id: repoId });
+      deletedRepoDataCount = deletedRepoData.deletedCount || 0;
+      console.log(`${logPrefix} Deleted ${deletedRepoDataCount} repo data for repository ${repoId}`);
+    } catch (e) {
+      console.warn(`${logPrefix} No RepoData found or error deleting RepoData: ${e.message}`);
     }
-    console.log(`${logPrefix} Deleted repo data for repository ${repoId}`);
 
     let deletedWorkflowsCount = 0;
     let deletedWorkflowsRunsCount = 0;
     let deletedCommitsCount = 0;
+    let deletedPredictionsCount = 0;
+    let deletedReportsCount = 0;
+    let workflowRunIds = [];
+    let githubRunIds = [];
 
     try {
       const deletedWorkflows = await Workflow.deleteMany({ repo_id: repoId });
       deletedWorkflowsCount = deletedWorkflows.deletedCount || 0;
       console.log(`${logPrefix} Deleted ${deletedWorkflowsCount} workflows for repository ${repoId}`);
     } catch (e) {
-      console.log(`${logPrefix} No workflows found or error deleting workflows for repository ${repoId}`);
+      console.warn(`${logPrefix} Error deleting workflows: ${e.message}`);
     }
 
-    let workflowRunIds = [];
     try {
-      const workflowRuns = await WorkflowRun.find({ repo_id: repoId }, '_id');
+      const workflowRuns = await WorkflowRun.find({ repo_id: repoId }, '_id github_run_id');
       workflowRunIds = workflowRuns.map(run => run._id);
+      githubRunIds = workflowRuns.map(run => run.github_run_id);
+      console.log(`${logPrefix} Found ${workflowRunIds.length} workflow run IDs for repository ${repoId}`);
       const deletedWorkflowsRuns = await WorkflowRun.deleteMany({ repo_id: repoId });
       deletedWorkflowsRunsCount = deletedWorkflowsRuns.deletedCount || 0;
       console.log(`${logPrefix} Deleted ${deletedWorkflowsRunsCount} workflow runs for repository ${repoId}`);
     } catch (e) {
-      console.log(`${logPrefix} No workflow runs found or error deleting workflow runs for repository ${repoId}`);
+      console.warn(`${logPrefix} Error deleting workflow runs: ${e.message}`);
     }
 
     try {
@@ -214,21 +224,49 @@ exports.deleteRepo = async (req, res, next) => {
         const deletedCommits = await Commit.deleteMany({ workflow_run_id: { $in: workflowRunIds } });
         deletedCommitsCount = deletedCommits.deletedCount || 0;
         console.log(`${logPrefix} Deleted ${deletedCommitsCount} commits for repository ${repoId}`);
+      } else {
+        console.log(`${logPrefix} No workflow run IDs found, skipping commit deletion`);
       }
     } catch (e) {
-      console.log(`${logPrefix} No commits found or error deleting commits for repository ${repoId}`);
+      console.error(`${logPrefix} Error deleting commits: ${e.message}, stack: ${e.stack}`);
+    }
+
+    try {
+      if (githubRunIds.length > 0) {
+        const deletedPredictions = await Prediction.deleteMany({ github_run_id: { $in: githubRunIds } });
+        deletedPredictionsCount = deletedPredictions.deletedCount || 0;
+        console.log(`${logPrefix} Deleted ${deletedPredictionsCount} predictions for repository ${repoId}`);
+      } else {
+        console.log(`${logPrefix} No github run IDs found, skipping prediction deletion`);
+      }
+    } catch (e) {
+      console.error(`${logPrefix} Error deleting predictions: ${e.message}, stack: ${e.stack}`);
+    }
+
+    try {
+      if (githubRunIds.length > 0) {
+        const deletedReports = await Report.deleteMany({ github_run_id: { $in: githubRunIds } });
+        deletedReportsCount = deletedReports.deletedCount || 0;
+        console.log(`${logPrefix} Deleted ${deletedReportsCount} reports for repository ${repoId}`);
+      } else {
+        console.log(`${logPrefix} No github run IDs found, skipping report deletion`);
+      }
+    } catch (e) {
+      console.error(`${logPrefix} Error deleting reports: ${e.message}, stack: ${e.stack}`);
     }
 
     res.status(200).json({
       message: 'Repository deleted successfully',
       deletedRepo: deletedRepo.full_name,
-      deletedRepoData: deletedRepoData.deletedCount,
+      deletedRepoData: deletedRepoDataCount,
       deletedWorkflows: deletedWorkflowsCount,
       deletedWorkflowsRuns: deletedWorkflowsRunsCount,
-      deletedCommits: deletedCommitsCount
+      deletedCommits: deletedCommitsCount,
+      deletedPredictions: deletedPredictionsCount,
+      deletedReports: deletedReportsCount
     });
   } catch (error) {
-    console.error(`${logPrefix} Error deleting repository: ${error.message}`);
+    console.error(`${logPrefix} Error deleting repository: ${error.message}, stack: ${error.stack}`);
     next(error);
   }
 };
